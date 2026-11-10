@@ -572,3 +572,4 @@ details.group .table-wrap { padding: 0 10px 10px; }
 .grid-2 > *, .grid-3 > * { min-width: 0; }
 @media (max-width: 720px) { .grid-2, .grid-3 { grid-template-columns: minmax(0, 1fr); } }
 @media (max-width: 960px) { .hero-inner { grid-template-columns: minmax(0, 1fr); } }
+.grid-2 .panel .clip { max-width: 170px; }
