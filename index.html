@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en" data-default-mode="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Timing Triage: Quartus timing reports and SDC, grouped by root cause</title>
+    <meta name="description" content="Paste Quartus Timing Analyzer reports and .sdc files. Get failing paths grouped by root cause, unconstrained clock-domain crossings, constraint lint, and the SDC lines that fix them." />
+    <meta name="theme-color" content="#041122" />
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%23041122'/><rect x='3' y='3' width='26' height='26' rx='5' fill='none' stroke='%230026ff' stroke-width='2'/><text x='16' y='21' font-family='Arial,sans-serif' font-size='12.5' font-weight='800' text-anchor='middle' fill='%23fffef4'>TT</text></svg>" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+    <script>
+      (function () {
+        var q = new URLSearchParams(location.search).get('mode')
+        var m = q === 'light' || q === 'dark' ? q : localStorage.getItem('themeMode')
+        document.documentElement.dataset.themeMode = m === 'light' || m === 'dark' ? m : document.documentElement.dataset.defaultMode
+      })()
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
