@@ -485,7 +485,9 @@ details.group .table-wrap { padding: 0 10px 10px; }
 .editor { display: grid; grid-template-columns: auto 1fr; border: 1px solid var(--border); border-radius: var(--r-lg); overflow: hidden; background: var(--bg-2); height: 520px; }
 .editor .gutter { margin: 0; padding: 10px 8px; text-align: right; color: var(--ink-3); font: 12.5px/20px var(--font-mono); overflow: hidden; user-select: none; border-right: 1px solid var(--line); min-width: 40px; }
 .editor textarea { border: 0; border-radius: 0; resize: none; font: 12.5px/20px var(--font-mono); padding: 10px 12px; background: transparent; height: 100%; white-space: pre; overflow: auto; box-shadow: none !important; }
-.lint { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.lint { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; }
+.lint li p { overflow-wrap: anywhere; }
+.lint .row { flex-wrap: nowrap; }
 .lint li { border: 1px solid var(--line); border-radius: var(--r-lg); padding: 10px 12px; background: var(--card); }
 .lint li p { margin: 8px 0; font-size: 14px; }
 .fix-line { display: block; flex: 1; min-width: 0; overflow-x: auto; white-space: pre; padding: 6px 8px !important; }
@@ -566,3 +568,7 @@ details.group .table-wrap { padding: 0 10px 10px; }
   .demo-kpis b { font-size: 1.1rem; }
   .filters .field { flex: 1 1 140px; }
 }
+.lint .linkish { font-size: 12px; }
+.grid-2 > *, .grid-3 > * { min-width: 0; }
+@media (max-width: 720px) { .grid-2, .grid-3 { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 960px) { .hero-inner { grid-template-columns: minmax(0, 1fr); } }

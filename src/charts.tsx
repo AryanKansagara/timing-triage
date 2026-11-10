@@ -34,7 +34,8 @@ export function SlackHistogram({ paths, highlight, onPick, height = 220, cap = 5
   const data = useMemo(() => bins(paths, 0.25, cap), [paths, cap])
   const [hover, setHover] = useState<number | null>(null)
   if (!data.length) return <p className="muted small">No setup paths in this report.</p>
-  const W = width, H = height, padL = 34, padB = 26, padT = 10
+  const narrow = typeof matchMedia === 'function' && matchMedia('(max-width: 720px)').matches
+  const W = narrow ? Math.min(width, 460) : width, H = height, padL = 34, padB = 26, padT = 10
   const tot = (b: Bin) => b.pass + b.cut + Object.values(b.by).reduce((a, x) => a + (x ?? 0), 0)
   // The last bin collects everything above the cap; it is clipped so it does not flatten the rest.
   const max = Math.max(1, ...data.slice(0, -1).map(tot))
@@ -93,7 +94,8 @@ export function SlackHistogram({ paths, highlight, onPick, height = 220, cap = 5
 export function Trend({ snaps }: { snaps: Snapshot[] }) {
   const s = [...snaps].sort((a, b) => a.at - b.at)
   if (s.length < 2) return <p className="muted small">Save at least two runs to see a trend.</p>
-  const W = 720, H = 200, pl = 44, pr = 44, pt = 14, pb = 34
+  const narrow = typeof matchMedia === 'function' && matchMedia('(max-width: 720px)').matches
+  const W = narrow ? 480 : 1100, H = 260, pl = 44, pr = 44, pt = 14, pb = 34
   const wmin = Math.min(0, ...s.map(x => x.wns)), wmax = Math.max(0.2, ...s.map(x => x.wns))
   const fmax = Math.max(1, ...s.map(x => x.failing))
   const x = (i: number) => pl + (W - pl - pr) * (s.length === 1 ? 0.5 : i / (s.length - 1))
