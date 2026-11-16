@@ -478,3 +478,11 @@ test('fixes speak the tool the report came from: no Quartus assignments on a Viv
   const q = analyze({ report: parseReport(vga().report), sdcText: vga().sdc })
   assert.match(JSON.stringify(buildFixes(q, q.clockDefs)), /set_instance_assignment/)
 })
+
+test('Vivado fanout comes from the data section only, never from the capture clock network', () => {
+  const r = pitaya()
+  // An input-port path has no launch clock section; the capture clock net (fo=13385) must not count.
+  assert.equal(r.paths.find(p => p.from === 'adc_dat_b_i[3]')!.fanout, 1)
+  assert.equal(r.paths.find(p => p.slack === -4.965)!.fanout, 33)
+  assert.ok(Math.max(...r.paths.map(p => p.fanout ?? 0)) < 100)
+})

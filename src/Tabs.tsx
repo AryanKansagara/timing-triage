@@ -288,7 +288,7 @@ function Cdc({ run, project }: TabProps) {
                   <span className={`badge ${x.status === 'unconstrained' ? 'severe' : x.status === 'cut' ? 'low' : 'moderate'}`}>{x.status === 'unconstrained' ? 'Unconstrained crossing' : x.status === 'cut' ? `Cut (SDC line ${x.cutBy ?? '—'})` : 'Related clocks'}</span>
                 </div>
                 <p className="small muted">{x.paths} path{x.paths === 1 ? '' : 's'} · {x.failing} failing{x.paths ? <> · worst <span className="mono">{fmtNs(x.wns)}</span> ns</> : null}</p>
-                {x.toBuses.length > 0 && <ul className="sync-list">
+                {x.toBuses.length > 0 && x.status !== 'related' && <ul className="sync-list">
                   {x.toBuses.map(b => <li key={b.bus}><span className="mono">{b.bus}</span> <span className="muted">({b.width} bit{b.width > 1 ? 's' : ''})</span>: {b.synchronized ? <span className="good-text">looks like a synchronizer stage</span> : b.width > 1 ? <span className="bad-text">multi-bit bus, needs a dual-clock FIFO or handshake</span> : <span className="warn-text">needs a two-flop synchronizer</span>}</li>)}
                 </ul>}
                 {x.status === 'related' && <p className="small">Both clocks come from the same reference, so the requirement is real. Treat it like a normal path, or use a multicycle if the transfer is enable-qualified.</p>}

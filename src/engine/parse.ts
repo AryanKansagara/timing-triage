@@ -320,8 +320,19 @@ function parseVivado(text: string): ParsedReport {
   const nums = (s: string) => s.trim().split(/\s+/).map(Number)
   let section = ''
   let p: TimingPath | null = null
-  let sep = 0, inTable = false
-  const flush = () => { if (p) r.paths.push(p); p = null }
+  let inTable = false
+  // The path table is split by dashed lines into launch clock, data and capture clock sections.
+  // Fanout only counts in data sections: clock nets have thousands of loads and say nothing about the path.
+  let secs: { clock: boolean; input: boolean; fo: number; seen: boolean }[] = []
+  const flush = () => {
+    if (p) {
+      const data = secs.filter(x => x.seen && (!x.clock || x.input))
+      const fo = Math.max(0, ...data.map(x => x.fo))
+      if (data.length && (fo > 0 || secs.some(x => x.fo > 0))) p.fanout = fo
+      r.paths.push(p)
+    }
+    p = null; secs = []
+  }
   let inClockSummary = false
 
   for (let i = 0; i < lines.length; i++) {
@@ -369,7 +380,7 @@ function parseVivado(text: string): ParsedReport {
       flush()
       if (sm[2] === 'inf') continue
       p = { id: '', analysis: 'setup', slack: Number(sm[2]), from: '', to: '', launch: '', latch: '', line: i + 1 }
-      sep = 0; inTable = false
+      inTable = false
       if (!r.found.includes('Path details')) r.found.push('Path details')
       continue
     }
@@ -385,14 +396,17 @@ function parseVivado(text: string): ParsedReport {
     else if ((v = field('Logic Levels'))) { cur.levels = num(v); cur.levelDetail = v.match(/\(([^)]+)\)/)?.[1] }
     else if ((v = field('Clock Path Skew'))) cur.skew = num(v)
     else if ((v = field('Clock Uncertainty'))) cur.uncertainty = num(v)
-    else if (/^\s*Location\s+Delay type/.test(l)) { inTable = true; sep = 0 }
-    else if (inTable && /^\s*-{20,}/.test(l)) sep++
-    else if (inTable && sep === 2) {
-      const fo = l.match(/fo=(\d+)/)
-      if (fo) cur.fanout = Math.max(cur.fanout ?? 0, Number(fo[1]))
-    }
+    else if (/^\s*Location\s+Delay type/.test(l)) { inTable = true; secs = [] }
+    else if (inTable && /^\s*-{20,}/.test(l)) secs.push({ clock: false, input: false, fo: 0, seen: false })
     else if (inTable && /^\s*arrival time\s+(-?[\d.]+)/.test(l)) cur.arrival = Math.abs(num(l)!)
     else if (inTable && /^\s*required time\s+(-?[\d.]+)/.test(l)) cur.required = num(l)
+    else if (inTable && secs.length && l.trim()) {
+      const sec = secs[secs.length - 1]
+      if (!sec.seen) { sec.seen = true; sec.clock = /^\s*\(clock /.test(l) }
+      if (/^\s*input delay\b/.test(l)) sec.input = true
+      const fo = l.match(/fo=(\d+)/)
+      if (fo) sec.fo = Math.max(sec.fo, Number(fo[1]))
+    }
   }
   flush()
   r.paths = r.paths.filter(x => {
