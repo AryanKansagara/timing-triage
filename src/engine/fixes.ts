@@ -9,7 +9,7 @@ export interface Fix {
   why: string
   /** Lines to append to the .sdc file. Applying them re-runs the analysis. */
   sdc?: string
-  /** Quartus settings (.qsf) assignments, applied in the project, not the SDC */
+  /** Tool settings applied in the project, not the SDC: Quartus .qsf assignments, or Vivado Tcl/XDC properties */
   qsf?: string
   steps: string[]
   pathIds: string[]
@@ -50,6 +50,10 @@ export function buildFixes(r: Result, clocks: Clock[], settings: Partial<Setting
   const s = { ...DEFAULT_SETTINGS, ...settings }
   const out: Fix[] = []
   const failing = r.paths.filter(p => p.slack < 0 && p.cutBy === null)
+  // The same diagnosis needs different commands in each tool.
+  const viv = r.format === 'vivado'
+  const regs = viv ? 'get_cells' : 'get_registers'
+  const cell = (n: string) => n.replace(/\/[A-Z][A-Z0-9]*$/, '')
 
   // Clocks on the derive_clocks 1 ns placeholder: nothing else is worth fixing until these have a real period.
   r.defaultClocks.forEach((clk, i) => {
@@ -114,12 +118,12 @@ export function buildFixes(r: Result, clocks: Clock[], settings: Partial<Setting
     for (const x of crossings) for (const t of x.toBuses) {
       if (t.synchronized) steps.push(`${t.bus} (${x.launch} → ${x.latch}) already looks like a synchronizer stage. Keep it and cut the path.`)
       else if (t.width <= 1) steps.push(`${t.bus}: single bit. Add a two-flop synchronizer in ${x.latch} before any logic uses it.`)
-      else steps.push(`${t.bus}: ${t.width} bits cross together. Two-flop synchronizers per bit can tear the word; use a dual-clock FIFO (dcfifo), a valid/ack handshake, or Gray-code it if it is a counter.`)
+      else steps.push(`${t.bus}: ${t.width} bits cross together. Two-flop synchronizers per bit can tear the word; use a dual-clock FIFO (${viv ? 'xpm_fifo_async' : 'dcfifo'}), a valid/ack handshake, or Gray-code it if it is a counter.`)
     }
     out.push({
       id: `cdc:${key}`, cause: 'cdc', severity: ps.length ? 'error' : 'warn',
       title: `Declare ${short(a)} and ${short(b)} asynchronous`,
-      why: `Timing Analyzer assumes ${short(a)} and ${short(b)} are related and times ${crossings.reduce((n, x) => n + x.paths, 0)} crossing path${crossings.length === 1 && crossings[0].paths === 1 ? '' : 's'} against the closest pair of edges, which is not a real requirement. The crossing needs a synchronizer in RTL and a constraint that says the clocks are unrelated.`,
+      why: `${viv ? 'Vivado' : 'Timing Analyzer'} assumes ${short(a)} and ${short(b)} are related and times ${crossings.reduce((n, x) => n + x.paths, 0)} crossing path${crossings.length === 1 && crossings[0].paths === 1 ? '' : 's'} against the closest pair of edges, which is not a real requirement. The crossing needs a synchronizer in RTL and a constraint that says the clocks are unrelated.`,
       sdc: `set_clock_groups -asynchronous \\\n  -group [get_clocks {${ga.join(' ')}}] \\\n  -group [get_clocks {${gb.join(' ')}}]`,
       steps: [...new Set(steps)].slice(0, 8),
       pathIds: ps.map(p => p.id), tns: tnsOf(ps),
@@ -143,17 +147,17 @@ export function buildFixes(r: Result, clocks: Clock[], settings: Partial<Setting
       id: `logic:${to}`, cause: 'logic', severity: 'error',
       title: lv ? `Pipeline ${to} (${lv} levels of logic)` : `Pipeline ${to} (${f3(wp.dataDelay ?? 0)} ns of data path in a ${f3(wp.relationship ?? 0)} ns requirement)`,
       why: lv
-        ? `${ps.length} path${ps.length > 1 ? 's' : ''} into ${to} go through up to ${lv} levels of logic and miss by up to ${f3(-worst)} ns on ${ps[0].latch}. Each LUT level plus routing costs roughly 0.4 to 0.7 ns, so the budget at this clock is about ${s.maxLevels} levels.`
+        ? `${ps.length} path${ps.length > 1 ? 's' : ''} into ${to} ${ps.length > 1 ? 'go' : 'goes'} through up to ${lv} levels of logic and ${ps.length > 1 ? 'miss' : 'misses'} by up to ${f3(-worst)} ns on ${ps[0].latch}. Each LUT level plus routing costs roughly 0.4 to 0.7 ns, so the budget at this clock is about ${s.maxLevels} levels.`
         : `${ps.length} path${ps.length > 1 ? 's' : ''} into ${to} need up to ${f3(wp.dataDelay ?? 0)} ns of data delay but the clock allows ${f3(wp.relationship ?? 0)} ns, so they miss by up to ${f3(-worst)} ns on ${ps[0].latch}. This report has no logic-level count; export report_timing -detail full_path to see whether cells or routing dominate.`,
       steps: [
         ...cellHints(ps),
         `Split the cone from ${from} into ${stages} register stages${lv ? ` (about ${Math.ceil(lv / stages)} levels each)` : ''} and add matching latency on any parallel path.`,
         `If the datapath is a wide add, compare or multiply, use the DSP block or a carry-chain friendly form instead of LUT logic.`,
-        `On Quartus Pro (Stratix 10 / Agilex), Hyper-Retiming can move registers into the cone once a pipeline register exists.`,
+        viv ? 'Once a pipeline register exists, synthesis retiming (below) or phys_opt_design -retime can balance the stages for you.' : 'On Quartus Pro (Stratix 10 / Agilex), Hyper-Retiming can move registers into the cone once a pipeline register exists.',
         `Only if the destination is enabled every 2nd cycle, a multicycle exception is valid instead (shown below with its hold pair).`,
       ],
-      qsf: `set_global_assignment -name ALLOW_REGISTER_RETIMING ON`,
-      sdc: `# Only valid if ${to} is enabled every 2nd clock:\n# set_multicycle_path -setup 2 -from [get_registers {${from}}] -to [get_registers {${to}}]\n# set_multicycle_path -hold 1 -from [get_registers {${from}}] -to [get_registers {${to}}]`,
+      qsf: viv ? 'set_property STEPS.SYNTH_DESIGN.ARGS.RETIMING true [get_runs synth_1]' : 'set_global_assignment -name ALLOW_REGISTER_RETIMING ON',
+      sdc: `# Only valid if ${to} is enabled every 2nd clock:\n# set_multicycle_path -setup 2 -from [${regs} {${from}}] -to [${regs} {${to}}]\n# set_multicycle_path -hold 1 -from [${regs} {${from}}] -to [${regs} {${to}}]`,
       pathIds: ps.map(p => p.id), tns: tnsOf(ps),
     })
   }
@@ -176,10 +180,10 @@ export function buildFixes(r: Result, clocks: Clock[], settings: Partial<Setting
       id: `fanout:${from}`, cause: 'fanout', severity: 'error',
       title: `Duplicate ${from} (fanout ${fo})`,
       why: `${from} drives ${fo} loads, so its net is spread across the die and every load waits for the slowest branch. ${ps.length} failing path${ps.length > 1 ? 's' : ''} start here.`,
-      qsf: `set_instance_assignment -name MAX_FANOUT ${Math.max(16, Math.min(64, Math.round(fo / 16)))} -to ${brace(from)}`,
+      qsf: viv ? `set_property MAX_FANOUT ${Math.max(16, Math.min(64, Math.round(fo / 16)))} [get_cells ${brace(cell(from))}]` : `set_instance_assignment -name MAX_FANOUT ${Math.max(16, Math.min(64, Math.round(fo / 16)))} -to ${brace(from)}`,
       steps: [
-        'Let the Fitter duplicate the register with the MAX_FANOUT assignment below, or duplicate it by hand per consuming block.',
-        /rst|reset/i.test(from) ? 'This looks like a reset: make it synchronous per clock domain and pipeline it through a reset tree, or drive it on a global with GLOBAL_SIGNAL.' : 'Add a pipeline register per consumer group so each copy has a local, small fanout.',
+        viv ? 'Let synthesis replicate the register with the MAX_FANOUT property below, run phys_opt_design -fanout_opt, or duplicate it by hand per consuming block.' : 'Let the Fitter duplicate the register with the MAX_FANOUT assignment below, or duplicate it by hand per consuming block.',
+        /rst|reset/i.test(from) ? 'This looks like a reset: make it synchronous per clock domain and pipeline it through a reset tree, or put it on a global buffer.' : 'Add a pipeline register per consumer group so each copy has a local, small fanout.',
       ],
       pathIds: ps.map(p => p.id), tns: tnsOf(ps),
     })
@@ -211,13 +215,14 @@ export function buildFixes(r: Result, clocks: Clock[], settings: Partial<Setting
     out.push({
       id: 'io', cause: 'io', severity: ioPaths.length ? 'error' : 'warn',
       title: inPorts.size || outPorts.size ? `Constrain ${inPorts.size + outPorts.size} unconstrained I/O port group${inPorts.size + outPorts.size > 1 ? 's' : ''}` : `Fix I/O timing on ${ports.slice(0, 2).join(', ')}`,
-      why: `${inPorts.size + outPorts.size ? `Ports without set_input_delay or set_output_delay are not timed at all, so the Fitter can place their registers anywhere. ` : ''}${ioPaths.length ? `${ioPaths.length} I/O path${ioPaths.length > 1 ? 's' : ''} fail: the external budget leaves too little time inside the FPGA.` : ''}`.trim(),
+      why: `${inPorts.size + outPorts.size ? `Ports without set_input_delay or set_output_delay are not timed at all, so the Fitter can place their registers anywhere. ` : ''}${ioPaths.length ? `${ioPaths.length} I/O path${ioPaths.length > 1 ? 's fail' : ' fails'}: the external budget leaves too little time inside the FPGA.` : ''}`.trim(),
       sdc: inPorts.size || outPorts.size ? lines.join('\n') : undefined,
-      qsf: ports.length ? ports.map(p => `set_instance_assignment -name ${ioPaths.some(x => bus(x.from) === p) ? 'FAST_INPUT_REGISTER' : 'FAST_OUTPUT_REGISTER'} ON -to ${brace(p)}`).join('\n') : undefined,
+      qsf: !ports.length ? undefined : viv ? ports.map(p => `set_property IOB TRUE [get_ports ${brace(p)}]`).join('\n') : ports.map(p => `set_instance_assignment -name ${ioPaths.some(x => bus(x.from) === p) ? 'FAST_INPUT_REGISTER' : 'FAST_OUTPUT_REGISTER'} ON -to ${brace(p)}`).join('\n'),
       steps: [
         'Take -max/-min from the external device datasheet and board trace delay; the values below are placeholders sized from the clock period.',
         'Asynchronous inputs (buttons, UART RX) need a synchronizer, then a set_false_path -from the port instead of an input delay.',
-        ports.length ? 'Pack the first/last register into the I/O cell (FAST_INPUT_REGISTER / FAST_OUTPUT_REGISTER) to make the path deterministic.' : '',
+        ioPaths.some(p => p.analysis === 'hold') ? 'The failing check is hold: the pin changes too soon after the capture edge. Check the -min delay first. If the capture clock is a PLL or MMCM output of the pin clock, its insertion delay is the skew; shift that output\'s phase or delay the data in the I/O cell.' : '',
+        ports.length ? `Pack the first/last register into the I/O cell (${viv ? 'the IOB property' : 'FAST_INPUT_REGISTER / FAST_OUTPUT_REGISTER'}) to make the path deterministic.` : '',
       ].filter(Boolean),
       pathIds: ioPaths.map(p => p.id), tns: tnsOf(ioPaths),
     })
@@ -249,10 +254,10 @@ export function buildFixes(r: Result, clocks: Clock[], settings: Partial<Setting
       why: `${skewPaths.length} path${skewPaths.length > 1 ? 's' : ''} fail mostly because the launch and latch clocks arrive at different times, not because the data path is slow. That points at a clock routed on local interconnect, a gated or derived (ripple) clock, or missing uncertainty modelling.`,
       steps: [
         'Never derive a clock from a register output (clk_div <= ~clk_div). Use a clock enable in the fast clock or a PLL output.',
-        'Make sure the clock is on a global or regional network (Fitter report: Global & Other Fast Signals).',
+        viv ? 'Make sure the clock is on a BUFG or BUFR (report_clock_utilization), not on general routing.' : 'Make sure the clock is on a global or regional network (Fitter report: Global & Other Fast Signals).',
         'Hold failures here are usually fixed automatically once the clock is global; do not add delay by hand.',
       ],
-      qsf: [...new Set(skewPaths.map(p => p.latch))].map(c => `set_instance_assignment -name GLOBAL_SIGNAL "GLOBAL CLOCK" -to ${brace(c)}`).join('\n'),
+      qsf: viv ? undefined : [...new Set(skewPaths.map(p => p.latch))].map(c => `set_instance_assignment -name GLOBAL_SIGNAL "GLOBAL CLOCK" -to ${brace(c)}`).join('\n'),
       pathIds: skewPaths.map(p => p.id), tns: tnsOf(skewPaths),
     })
   }
@@ -262,7 +267,7 @@ export function buildFixes(r: Result, clocks: Clock[], settings: Partial<Setting
     id: 'route', cause: 'route', severity: 'warn',
     title: `Routing-dominated paths (${routePaths.length})`,
     why: 'These paths have few logic levels and modest fanout, so most of the delay is wire. The registers are probably far apart or the region is congested.',
-    steps: ['Add a pipeline register in the middle of long paths between distant blocks.', 'Check the Chip Planner for congestion; relax LogicLock regions that force distant placement.', 'Try a few Fitter seeds (Design Space Explorer) once the real causes above are fixed.'],
+    steps: ['Add a pipeline register in the middle of long paths between distant blocks.', viv ? 'Check report_design_analysis -congestion and the Device view; relax Pblocks that force distant placement.' : 'Check the Chip Planner for congestion; relax LogicLock regions that force distant placement.', viv ? 'Try other implementation strategies (Performance_Explore, ExtraTimingOpt) once the real causes above are fixed.' : 'Try a few Fitter seeds (Design Space Explorer) once the real causes above are fixed.'],
     pathIds: routePaths.map(p => p.id), tns: tnsOf(routePaths),
   })
 

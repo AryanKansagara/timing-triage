@@ -467,3 +467,14 @@ test('all four samples parse without errors and the real ones carry their source
   }
   assert.deepEqual(samples().filter(s => s.real).map(s => [s.id, s.real!.licence]), [['avr-cpu', 'MIT'], ['red-pitaya', 'MIT']])
 })
+
+test('fixes speak the tool the report came from: no Quartus assignments on a Vivado design', () => {
+  const r = analyze({ report: pitaya(), sdcText: RED_PITAYA_XDC })
+  const fixes = buildFixes(r, r.clockDefs)
+  const text = JSON.stringify(fixes)
+  assert.doesNotMatch(text, /set_instance_assignment|set_global_assignment|get_registers|Chip Planner|Fitter/)
+  assert.match(fixes.find(f => f.cause === 'io')!.qsf!, /set_property IOB TRUE \[get_ports \{adc_dat_b_i\[\*\]\}\]/)
+  assert.ok(fixes.find(f => f.cause === 'io')!.steps.some(s => /failing check is hold/.test(s)))
+  const q = analyze({ report: parseReport(vga().report), sdcText: vga().sdc })
+  assert.match(JSON.stringify(buildFixes(q, q.clockDefs)), /set_instance_assignment/)
+})

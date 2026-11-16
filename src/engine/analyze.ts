@@ -25,6 +25,8 @@ export interface ClockStat {
   /** MHz. Taken from the tool's own Fmax summary when the report has one, else estimated from same-clock setup slack. */
   fmax: number | null
   fmaxFrom: 'report' | 'estimate' | null
+  /** Unrounded estimate from the listed same-clock paths, for the what-if slider */
+  fmaxEst: number | null
   /** Failing setup endpoints the tool reports for this clock, which can exceed the paths listed in the export */
   endpoints?: number
   /** Timed against the 1 ns placeholder from derive_clocks -period 1.0 */
@@ -201,7 +203,7 @@ export function analyze({ report, sdcText, settings }: Inputs): Result {
       clock: c, period: per, wns: round(wns), tns: round(Math.min(sumNeg(setup), sumS?.tns ?? 0)),
       failing: mine.filter(p => p.slack < 0).length, total: mine.length,
       holdWns: Number.isFinite(holdWns) ? round(holdWns) : null, holdTns: round(Math.min(sumNeg(hold), sumH?.tns ?? 0)),
-      fmax: reported?.fmax ?? est, fmaxFrom: reported ? 'report' : est ? 'estimate' : null,
+      fmax: reported?.fmax ?? est, fmaxFrom: reported ? 'report' : est ? 'estimate' : null, fmaxEst: est,
       endpoints: sumS?.failing, isDefault: defaults.has(c),
     } satisfies ClockStat
   }).sort((a, b) => a.wns - b.wns)

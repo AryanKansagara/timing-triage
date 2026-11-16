@@ -41,6 +41,9 @@ function Overview({ project, run }: TabProps) {
   const [hl, setHl] = useState<Cause | null>(null)
   const worstFmax = r.clocks.filter(c => c.fmax !== null && c.period).sort((a, b) => (a.fmax! * a.period!) - (b.fmax! * b.period!))[0]
   const lintErr = r.lint.filter(l => l.level === 'error').length
+  // Clocks that time nothing (PLL feedback, unused outputs) only add noise to the table.
+  const timed = r.clocks.filter(c => c.total > 0 || Number.isFinite(c.wns) || c.isDefault)
+  const untimed = r.clocks.filter(c => !timed.includes(c))
   const sel = hl ? r.paths.filter(p => p.cause === hl && p.cutBy === null && p.slack < 0).sort((a, b) => a.slack - b.slack) : []
   return (
     <>
@@ -97,10 +100,10 @@ function Overview({ project, run }: TabProps) {
           <div className="table-wrap">
             <table>
               <thead><tr><th>Clock</th><th className="num">Target</th><th className="num">WNS</th><th className="num">TNS</th><th className="num" title="Failing endpoints reported by the tool, or failing paths listed when it reports none">Fail</th><th className="num">Fmax</th></tr></thead>
-              <tbody>{r.clocks.map(c => (
+              <tbody>{timed.map(c => (
                 <tr key={c.clock}>
                   <th className="mono clip" title={c.clock}>{c.clock}</th>
-                  <td className="num mono">{c.isDefault ? <span className="warn-text" title="derive_clocks -period 1.0 placeholder">1000 MHz default</span> : c.period ? `${fmtN(1000 / c.period, 2)} MHz` : '—'}</td>
+                  <td className="num mono nowrap">{c.isDefault ? <span className="warn-text" title="derive_clocks -period 1.0 placeholder">1000 MHz default</span> : c.period ? `${fmtN(1000 / c.period, 2)} MHz` : '—'}</td>
                   <td className={`num mono ${c.wns < 0 ? 'bad-text' : ''}`}>{Number.isFinite(c.wns) ? fmtNs(c.wns) : '—'}</td>
                   <td className="num mono">{fmtNs(c.tns)}</td>
                   <td className="num">{fmtN(c.endpoints ?? c.failing)}</td>
@@ -109,7 +112,8 @@ function Overview({ project, run }: TabProps) {
               ))}</tbody>
             </table>
           </div>
-          <p className="muted tiny">Fmax comes from the report&rsquo;s own Fmax summary when it has one. Values marked est. are 1000 / (period − worst same-clock setup slack); cross-clock paths are excluded. Clocks with no value have no timed paths.</p>
+          {untimed.length > 0 && <p className="muted small">{untimed.length} clock{untimed.length > 1 ? 's' : ''} with no timed paths in this report: <span className="mono">{untimed.map(c => c.clock.split('|').slice(-2).join('|')).join(', ')}</span></p>}
+          <p className="muted tiny">Fmax comes from the report&rsquo;s own Fmax summary when it has one. Values marked est. are 1000 / (period − worst same-clock setup slack); cross-clock paths are excluded.</p>
         </div>
         <WhatIf run={run} />
       </div>
@@ -140,7 +144,8 @@ function WhatIf({ run }: { run: TabProps['run'] }) {
   const st = opts.find(c => c.clock === clock)
   const base = st?.period ? 1000 / st.period : 100
   // A clock on the 1000 MHz placeholder starts at its Fmax; the slider has to reach down to it.
-  const start = st?.isDefault && st.fmax ? Math.floor(st.fmax * 100) / 100 : Math.round(base * 100) / 100
+  const top = st?.fmaxEst ? Math.floor(st.fmaxEst * 100) / 100 : null
+  const start = st?.isDefault && top ? top : Math.round(base * 100) / 100
   const lo = Math.max(0.5, Math.min(base, st?.fmax ?? base) * 0.5), hi = st?.isDefault && st.fmax ? st.fmax * 2 : Math.max(base, st?.fmax ?? 0) * 1.5
   const [mhz, setMhz] = useState(start)
   useEffect(() => setMhz(start), [clock, start])
@@ -155,7 +160,7 @@ function WhatIf({ run }: { run: TabProps['run'] }) {
       </label>
       <div className="row gap-sm wrap">
         {!st.isDefault && <button type="button" className="btn sm ghost" onClick={() => setMhz(base)}>Target</button>}
-        {st.fmax && <button type="button" className="btn sm ghost" onClick={() => setMhz(Math.floor(st.fmax! * 100) / 100)}>Fmax ({fmtN(st.fmax, 1)})</button>}
+        {top && <button type="button" className="btn sm ghost" onClick={() => setMhz(top)}>Fmax ({fmtN(top, 1)})</button>}
       </div>
       {w && (
         <dl className="mini-stats whatif">
@@ -403,7 +408,7 @@ function Fixes({ project, run, update, ds }: TabProps) {
                   <p>{f.why}</p>
                   {f.steps.length > 0 && <ul className="steps">{f.steps.map(s => <li key={s}>{s}</li>)}</ul>}
                   {f.sdc && <Code label={canApply ? 'SDC' : 'SDC (commented: read the condition first)'} code={f.sdc} />}
-                  {f.qsf && <Code label="QSF assignment (Assignments > Assignment Editor, or paste into the .qsf)" code={f.qsf} />}
+                  {f.qsf && <Code label={r.format === 'vivado' ? 'Tcl / XDC property (Tcl console, or paste into the .xdc)' : 'QSF assignment (Assignments > Assignment Editor, or paste into the .qsf)'} code={f.qsf} />}
                 </div>
                 <div className="fix-impact">
                   {f.tns < 0 && <><b className="mono">{fmtNs(f.tns, 2)}</b><small>ns TNS addressed</small></>}
