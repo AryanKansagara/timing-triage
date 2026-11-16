@@ -32,7 +32,7 @@
   --shadow: 0 1px 2px #04112214, 0 2px 6px #04112210;
   --shadow-lg: 0 24px 60px -24px #0411224d;
   --glow: 0 0 0 1px #0026ff, 0 0 16px #0026ff40;
-  --c-cdc: #e5484d; --c-logic: #0026ff; --c-fanout: #0094f0; --c-io: #c98a14; --c-skew: #8e4ec6; --c-route: #6b8f5e;
+  --c-noclock: #d6409f; --c-cdc: #e5484d; --c-edge: #e2702a; --c-logic: #0026ff; --c-fanout: #0094f0; --c-io: #c98a14; --c-skew: #8e4ec6; --c-route: #6b8f5e;
   --bar-pass: #b9c3d8; --bar-soft: #d6dcf0; --bar-cut: transparent;
   --fail-zone: #e5484d12;
   --hero-bg: radial-gradient(900px 480px at 85% -10%, #dfe9f6 0%, transparent 60%), radial-gradient(700px 380px at -5% 0%, #f9c9bf55 0%, transparent 55%), #fffef4;
@@ -62,7 +62,7 @@
   --shadow: 0 1px 2px #0008, 0 2px 8px #0006;
   --shadow-lg: 0 24px 60px -20px #000c;
   --glow: 0 0 0 1px #7491ff, 0 0 18px #0026ff80;
-  --c-cdc: #ff7a6b; --c-logic: #7491ff; --c-fanout: #63ceff; --c-io: #f4daa6; --c-skew: #c9a0ff; --c-route: #c9e1bd;
+  --c-noclock: #ff8dcc; --c-cdc: #ff7a6b; --c-edge: #ffb37a; --c-logic: #7491ff; --c-fanout: #63ceff; --c-io: #f4daa6; --c-skew: #c9a0ff; --c-route: #c9e1bd;
   --bar-pass: #2b4470; --bar-soft: #1d335a; --bar-cut: transparent;
   --fail-zone: #ff7a6b10;
   --hero-bg: radial-gradient(1000px 520px at 88% -12%, #0026ff55 0%, transparent 60%), radial-gradient(700px 400px at -10% 10%, #02195d 0%, transparent 60%), #041122;

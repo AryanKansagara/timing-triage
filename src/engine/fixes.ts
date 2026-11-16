@@ -27,10 +27,75 @@ function tnsOf(ps: Classified[]) {
   return Math.round([...worst.values()].reduce((a, b) => a + b, 0) * 1000) / 1000
 }
 
+const COMMON_MHZ = [200, 150, 125, 100, 80, 50, 48, 40, 27, 25, 24, 20, 16, 12, 10, 8, 4, 2, 1]
+
+/** Frequency in MHz for a clock named after its oscillator: CLOCK_50, CLOCK_27_0, clk100, CLK50M, clk_12mhz. */
+export function mhzFromName(name: string): number | null {
+  const m = name.match(/(\d+)(?:_?m(?:hz)?)?(?:_\d)?$/i)
+  const n = m ? Number(m[1]) : NaN
+  return n >= 4 && n <= 500 ? n : null
+}
+
+/** A starting period for a clock that has none: the frequency in its name, else the fastest common oscillator under its Fmax. */
+export function suggestPeriod(name: string, fmaxMhz: number | null): { period: number; mhz: number; from: 'name' | 'fmax' | 'guess' } {
+  const named = mhzFromName(name)
+  if (named) return { period: 1000 / named, mhz: named, from: 'name' }
+  const fit = fmaxMhz ? COMMON_MHZ.find(f => f <= fmaxMhz) : undefined
+  return fit ? { period: 1000 / fit, mhz: fit, from: 'fmax' } : { period: 20, mhz: 50, from: 'guess' }
+}
+
+const isHier = (n: string) => /[|/:]/.test(n)
+
 export function buildFixes(r: Result, clocks: Clock[], settings: Partial<Settings> = {}): Fix[] {
   const s = { ...DEFAULT_SETTINGS, ...settings }
   const out: Fix[] = []
   const failing = r.paths.filter(p => p.slack < 0 && p.cutBy === null)
+
+  // Clocks on the derive_clocks 1 ns placeholder: nothing else is worth fixing until these have a real period.
+  r.defaultClocks.forEach((clk, i) => {
+    const st = r.clocks.find(c => c.clock === clk)
+    const ps = failing.filter(p => p.cause === 'noclock' && (p.latch === clk || p.launch === clk))
+    const sug = suggestPeriod(clk, st?.fmax ?? null)
+    const basis = sug.from === 'name' ? `${sug.mhz} MHz, read from the pin name` : sug.from === 'fmax' ? `${sug.mhz} MHz, the fastest common oscillator under the reported Fmax` : `${sug.mhz} MHz, a placeholder`
+    const target = isHier(clk) ? `[get_registers {${clk}}]` : `[get_ports {${clk}}]`
+    out.push({
+      id: `noclock:${clk}`, cause: 'noclock', severity: 'error',
+      title: `Give ${short(clk)} a real clock constraint`,
+      why: `${r.hasSdc ? 'The SDC does not constrain this clock' : 'The project has no SDC'}, so Quartus ran derive_clocks -period 1.0 and timed ${clk} at 1000 MHz. ${ps.length ? `All ${ps.length} failing path${ps.length > 1 ? 's' : ''} on it are` : 'Its slack is'} measured against that placeholder.${st?.fmax ? ` The design runs at up to ${st.fmax.toFixed(2)} MHz on this clock${st.fmaxFrom === 'report' ? ' (Quartus Fmax summary)' : ''}, so any real target at or below that already meets setup.` : ''}`,
+      sdc: [`# Set -period to the real clock on this pin. Value below: ${basis}.`, `create_clock -name {${clk}} -period ${f3(sug.period)} ${target}`, ...(i === 0 && !r.hasSdc ? ['derive_pll_clocks', 'derive_clock_uncertainty'] : [])].join('\n'),
+      steps: [
+        'Save the lines as <revision>.sdc next to the .qpf and add it to the project (Assignments > Settings > Timing Analyzer), then recompile so the Fitter optimises for the real target.',
+        'Applying the fix here re-estimates same-clock setup slack at the new period; hold slack does not depend on the period.',
+        ...(isHier(clk) ? ['This clock is a register output (a ripple or divided clock). Prefer a clock enable in the source clock domain; if it must stay, describe it with create_generated_clock -divide_by from its source clock instead.'] : []),
+      ],
+      pathIds: ps.map(p => p.id), tns: Math.min(tnsOf(ps), st?.tns ?? 0),
+    })
+  })
+
+  // Nodes the tool found driving clock pins with no constraint at all: their registers are not timed.
+  if (r.unconstrainedClocks.length) {
+    const base = r.clocks.find(c => c.period && !c.isDefault)
+    const vivado = r.format === 'vivado'
+    const lines = r.unconstrainedClocks.slice(0, 12).map(n => {
+      if (!isHier(n) && /\[\d+\]$/.test(n) && !vivado) return `create_generated_clock -name {${n}} -source [get_ports {${base?.clock ?? 'clk'}}] -divide_by 2 [get_registers {${n}}]`
+      const nm = n.replace(/\/[A-Z]+$/, '').split(/[|/]/).pop()!.replace(/[^\w]/g, '_')
+      if (!isHier(n)) { const sug = suggestPeriod(n, null); return `create_clock -name {${n}} -period ${f3(sug.period)} [get_ports {${n}}]` }
+      return vivado
+        ? `create_generated_clock -name ${nm} -source [get_pins {${n.replace(/\/Q$/, '/C')}}] -divide_by 2 [get_pins {${n}}]`
+        : `create_generated_clock -name {${nm}} -source [get_ports {${base?.clock ?? 'clk'}}] -divide_by 2 [get_registers {${n}}]`
+    })
+    out.push({
+      id: 'undefined-clocks', cause: 'sdc', severity: 'error',
+      title: `Constrain ${r.unconstrainedClocks.length} undefined clock${r.unconstrainedClocks.length > 1 ? 's' : ''}`,
+      why: `${r.unconstrainedClocks.slice(0, 3).join(', ')}${r.unconstrainedClocks.length > 3 ? ` and ${r.unconstrainedClocks.length - 3} more` : ''} drive${r.unconstrainedClocks.length === 1 ? 's' : ''} register clock pins but ${r.unconstrainedClocks.length === 1 ? 'has' : 'have'} no clock constraint. Every register they clock is left out of timing analysis, so the report looks cleaner than the design is.`,
+      sdc: lines.join('\n'),
+      steps: [
+        'For a pin, set -period to the real oscillator. For a register output used as a clock, set -divide_by to the real ratio and -source to the clock that register runs on.',
+        'A register output used as a clock is a ripple clock: it adds skew and often hold failures. Where you can, replace it with a clock enable.',
+      ],
+      pathIds: [], tns: 0,
+    })
+  }
 
   // Unconstrained crossings: one set_clock_groups per pair of clock families.
   const fam = (c: string) => rootClock(c, clocks)
@@ -69,15 +134,20 @@ export function buildFixes(r: Result, clocks: Clock[], settings: Partial<Setting
   }
   for (const [to, ps] of groupBy('logic', p => bus(p.to))) {
     const lv = Math.max(...ps.map(p => p.levels ?? 0))
-    const stages = Math.max(2, Math.ceil(lv / s.maxLevels))
     const worst = Math.min(...ps.map(p => p.slack))
+    const wp = ps.find(p => p.slack === worst)!
+    // Without a level count, size the pipeline from how many requirements the data delay spans.
+    const stages = Math.max(2, lv ? Math.ceil(lv / s.maxLevels) : Math.ceil((wp.dataDelay ?? 0) / (wp.relationship || Infinity)))
     const from = bus(ps[0].from)
     out.push({
       id: `logic:${to}`, cause: 'logic', severity: 'error',
-      title: `Pipeline ${to} (${lv} levels of logic)`,
-      why: `${ps.length} path${ps.length > 1 ? 's' : ''} into ${to} go through up to ${lv} levels of logic and miss by up to ${f3(-worst)} ns on ${ps[0].latch}. Each LUT level plus routing costs roughly 0.4 to 0.7 ns, so the budget at this clock is about ${s.maxLevels} levels.`,
+      title: lv ? `Pipeline ${to} (${lv} levels of logic)` : `Pipeline ${to} (${f3(wp.dataDelay ?? 0)} ns of data path in a ${f3(wp.relationship ?? 0)} ns requirement)`,
+      why: lv
+        ? `${ps.length} path${ps.length > 1 ? 's' : ''} into ${to} go through up to ${lv} levels of logic and miss by up to ${f3(-worst)} ns on ${ps[0].latch}. Each LUT level plus routing costs roughly 0.4 to 0.7 ns, so the budget at this clock is about ${s.maxLevels} levels.`
+        : `${ps.length} path${ps.length > 1 ? 's' : ''} into ${to} need up to ${f3(wp.dataDelay ?? 0)} ns of data delay but the clock allows ${f3(wp.relationship ?? 0)} ns, so they miss by up to ${f3(-worst)} ns on ${ps[0].latch}. This report has no logic-level count; export report_timing -detail full_path to see whether cells or routing dominate.`,
       steps: [
-        `Split the cone from ${from} into ${stages} register stages (about ${Math.ceil(lv / stages)} levels each) and add matching latency on any parallel path.`,
+        ...cellHints(ps),
+        `Split the cone from ${from} into ${stages} register stages${lv ? ` (about ${Math.ceil(lv / stages)} levels each)` : ''} and add matching latency on any parallel path.`,
         `If the datapath is a wide add, compare or multiply, use the DSP block or a carry-chain friendly form instead of LUT logic.`,
         `On Quartus Pro (Stratix 10 / Agilex), Hyper-Retiming can move registers into the cone once a pipeline register exists.`,
         `Only if the destination is enabled every 2nd cycle, a multicycle exception is valid instead (shown below with its hold pair).`,
@@ -86,6 +156,18 @@ export function buildFixes(r: Result, clocks: Clock[], settings: Partial<Setting
       sdc: `# Only valid if ${to} is enabled every 2nd clock:\n# set_multicycle_path -setup 2 -from [get_registers {${from}}] -to [get_registers {${to}}]\n# set_multicycle_path -hold 1 -from [get_registers {${from}}] -to [get_registers {${to}}]`,
       pathIds: ps.map(p => p.id), tns: tnsOf(ps),
     })
+  }
+
+  function cellHints(ps: Classified[]): string[] {
+    const cells = ps.map(p => p.levelDetail ?? '').join(' ')
+    const worst = [...ps].sort((a, b) => a.slack - b.slack)[0]
+    const share = worst.logicDelay !== undefined && worst.dataDelay ? ` Cells are ${Math.round(100 * worst.logicDelay / worst.dataDelay)}% of the ${f3(worst.dataDelay)} ns data path; routing is the rest.` : ''
+    const out: string[] = []
+    if (/DSP48/.test(cells)) out.push(`The path runs through a DSP48 block.${share} Turn on its internal registers (AREG/BREG, MREG, PREG) by registering the multiplier inputs, product and output in RTL so synthesis can absorb them.`)
+    if (/RAMB/.test(cells)) out.push('The path starts or ends in block RAM. Enable the RAM output register (DOA_REG/DOB_REG = 1) or register the read data before using it.')
+    const carry = Number(cells.match(/CARRY\d*=(\d+)/)?.[1] ?? 0)
+    if (carry >= 6) out.push(`${carry} carry cells in a row means a ${carry * 4}-bit or wider add or compare in one cycle. Split it into two narrower stages or register the operands and the result.`)
+    return out
   }
 
   for (const [from, ps] of groupBy('fanout', p => p.from)) {
@@ -107,9 +189,21 @@ export function buildFixes(r: Result, clocks: Clock[], settings: Partial<Setting
   const ioPaths = failing.filter(p => p.cause === 'io')
   const inPorts = new Set(r.unconstrainedPorts.filter(u => u.kind === 'input').map(u => bus(u.name)))
   const outPorts = new Set(r.unconstrainedPorts.filter(u => u.kind === 'output').map(u => bus(u.name)))
+  if (r.portCounts && !inPorts.size && !outPorts.size) out.push({
+    id: 'io-counts', cause: 'io', severity: 'warn',
+    title: `Constrain ${r.portCounts.inputs} input and ${r.portCounts.outputs} output ports`,
+    why: `The report counts ${r.portCounts.inputs} input and ${r.portCounts.outputs} output ports with no set_input_delay or set_output_delay. They are not timed at all, so the tool can place their registers anywhere and the board interface is unchecked. This export does not name them.`,
+    steps: [
+      r.format === 'vivado' ? 'List them in Vivado with: check_timing -verbose -file check_timing.rpt' : 'List them in Quartus with: report_ucp -file ucp.rpt, then import that file here to get a per-port template.',
+      'Constrain synchronous interfaces with set_input_delay / set_output_delay against the interface clock, using the external device datasheet.',
+      'Buttons, switches, LEDs and other asynchronous pins should get set_false_path -from [get_ports ...] or -to [get_ports ...] instead, after a synchronizer on inputs.',
+    ],
+    pathIds: [], tns: 0,
+  })
   if (ioPaths.length || inPorts.size || outPorts.size) {
-    const clk = r.clocks.find(c => c.period)?.clock ?? 'clk'
-    const per = r.clocks.find(c => c.clock === clk)?.period ?? 10
+    const st = r.clocks.find(c => c.period)
+    const clk = st?.clock ?? 'clk'
+    const per = st?.isDefault ? suggestPeriod(clk, st.fmax).period : st?.period ?? 10
     const lines = ['# Board-level clock that launches/captures the external device; adjust to the real interface.', `create_clock -name virt_${clk.replace(/[^\w]/g, '_')} -period ${f3(per)}`]
     for (const p of inPorts) lines.push(`set_input_delay -clock virt_${clk.replace(/[^\w]/g, '_')} -max ${f3(per * 0.4)} [get_ports {${p}}]`, `set_input_delay -clock virt_${clk.replace(/[^\w]/g, '_')} -min 0.000 [get_ports {${p}}]`)
     for (const p of outPorts) lines.push(`set_output_delay -clock virt_${clk.replace(/[^\w]/g, '_')} -max ${f3(per * 0.3)} [get_ports {${p}}]`, `set_output_delay -clock virt_${clk.replace(/[^\w]/g, '_')} -min 0.000 [get_ports {${p}}]`)
@@ -126,6 +220,23 @@ export function buildFixes(r: Result, clocks: Clock[], settings: Partial<Setting
         ports.length ? 'Pack the first/last register into the I/O cell (FAST_INPUT_REGISTER / FAST_OUTPUT_REGISTER) to make the path deterministic.' : '',
       ].filter(Boolean),
       pathIds: ioPaths.map(p => p.id), tns: tnsOf(ioPaths),
+    })
+  }
+
+  for (const [clk, ps] of groupBy('edge', p => p.latch)) {
+    const per = r.clocks.find(c => c.clock === clk)?.period ?? 0
+    const worst = [...ps].sort((a, b) => a.slack - b.slack)[0]
+    const fits = worst.dataDelay !== undefined && worst.dataDelay < per
+    out.push({
+      id: `edge:${clk}`, cause: 'edge', severity: 'error',
+      title: `Opposite-edge paths on ${short(clk)} get ${f3(per / 2)} ns, not ${f3(per)} ns`,
+      why: `${ps.length} failing path${ps.length > 1 ? 's' : ''} launch on one edge of ${clk} and latch on the other, so the requirement is half the period. The worst needs ${f3(worst.dataDelay ?? 0)} ns of data delay${fits ? ', which would fit in a full cycle' : ', which is over a full cycle too, so it also needs pipelining'}.`,
+      steps: [
+        `Find the falling-edge register: ${bus(worst.from)} or ${bus(worst.to)} is clocked on negedge (or through an inverted clock). Clock both ends on the same edge unless the interface needs otherwise.`,
+        'If a half-cycle shift is intended (SDRAM, DDR or SPI capture), use a phase-shifted PLL output for that register and constrain it, instead of inverting the clock in logic.',
+        'Block RAM address registers clocked on the opposite edge are a common cause: use the same edge and accept one cycle of read latency.',
+      ],
+      pathIds: ps.map(p => p.id), tns: tnsOf(ps),
     })
   }
 

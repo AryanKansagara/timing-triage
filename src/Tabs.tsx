@@ -20,8 +20,10 @@ export default function Tabs(props: TabProps & { tab: Tab }) {
 }
 
 const CAUSE_HELP: Record<Cause, string> = {
+  noclock: 'The clock has no constraint, so Quartus timed it at a default 1 ns (1000 MHz). These failures say nothing about the real design until the clock has its real period.',
   cdc: 'Launch and latch clocks come from different sources and the SDC does not say so, so Timing Analyzer times the crossing against the closest pair of edges.',
   io: 'A path to or from a device pin. Either the port has no set_input_delay/set_output_delay, or the external budget leaves too little time inside the FPGA.',
+  edge: 'Launch and latch registers use opposite edges of the same clock, so the data has half a period to arrive. Usually one register is clocked on negedge or through an inverted clock.',
   logic: 'More levels of logic than fit in one clock period. Pipelining or restructuring the logic is the fix; constraints will not help.',
   fanout: 'A register drives so many loads that the net itself is slow. Duplicate the register or pipeline the distribution.',
   skew: 'Most of the deficit comes from the clock arriving at different times at launch and latch: a gated or derived clock, or a clock not on a global network.',

@@ -4,7 +4,7 @@ import type { Snapshot } from './engine/snapshot.ts'
 import type { Cause } from './engine/types.ts'
 import { fmtNs } from './ui.tsx'
 
-export const CAUSE_ORDER: Cause[] = ['cdc', 'logic', 'fanout', 'io', 'skew', 'route']
+export const CAUSE_ORDER: Cause[] = ['noclock', 'cdc', 'edge', 'logic', 'fanout', 'io', 'skew', 'route']
 export const causeColor = (c: Cause) => `var(--c-${c})`
 
 export function CauseDot({ cause }: { cause: Cause }) {

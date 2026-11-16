@@ -1,9 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
-import { analyze, mergeClocks } from './engine/analyze.ts'
+import { analyze } from './engine/analyze.ts'
 import { buildFixes } from './engine/fixes.ts'
 import { detectFormat, parseReport } from './engine/parse.ts'
 import { samples } from './engine/sample.ts'
-import { parseSdc } from './engine/sdc.ts'
 import { snapshot } from './engine/snapshot.ts'
 import type { ParsedReport } from './engine/types.ts'
 import { getData, getDefaults, getProjects, saveProject, useProjects, uuid, type Dataset, type Project } from './store.ts'
@@ -21,7 +20,17 @@ export function combine(list: ParsedReport[]): ParsedReport {
       out.paths.push({ ...p, id: `f${i}${p.id}` })
     }
     for (const c of r.clocks) if (!out.clocks.some(x => x.name === c.name)) out.clocks.push(c)
-    for (const s of r.summary) if (!out.summary.some(x => x.clock === s.clock && x.analysis === s.analysis)) out.summary.push(s)
+    for (const s of r.summary) {
+      const prev = out.summary.find(x => x.clock === s.clock && x.analysis === s.analysis)
+      if (!prev) out.summary.push({ ...s })
+      else if (s.slack < prev.slack) Object.assign(prev, s, { tns: Math.min(prev.tns, s.tns) })
+    }
+    out.meta = { ...r.meta, ...out.meta }
+    out.totals ??= r.totals
+    for (const f of r.fmax ?? []) if (!out.fmax?.some(x => x.clock === f.clock)) (out.fmax ??= []).push(f)
+    for (const c of r.defaultClocks ?? []) if (!out.defaultClocks?.includes(c)) (out.defaultClocks ??= []).push(c)
+    if (r.counts) out.counts = { ...r.counts, ...out.counts }
+    out.issues.push(...r.issues)
     for (const u of r.unconstrained) if (!out.unconstrained.some(x => x.name === u.name && x.kind === u.kind)) out.unconstrained.push(u)
     out.transfers.push(...r.transfers)
     out.found.push(...r.found)
@@ -37,8 +46,7 @@ const sampleData = (id: string): Dataset | null => {
 export function runAnalysis(files: Dataset, p: Pick<Project, 'sdc' | 'settings'>) {
   const report = combine(files.filter(f => detectFormat(f.text) !== 'sdc').map(f => parseReport(f.text)))
   const r = analyze({ report, sdcText: p.sdc, settings: p.settings })
-  const clocks = mergeClocks(report.clocks, p.sdc.trim() ? parseSdc(p.sdc) : null)
-  return { report, r, clocks, fixes: buildFixes(r, clocks, p.settings) }
+  return { report, r, clocks: r.clockDefs, fixes: buildFixes(r, r.clockDefs, p.settings) }
 }
 export type Run = ReturnType<typeof runAnalysis>
 

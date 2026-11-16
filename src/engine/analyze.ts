@@ -1,11 +1,13 @@
 import { clocksCut, ioConstrained, lintSdc, parseSdc, pathCut, type LintFinding, type SdcModel } from './sdc.ts'
-import type { Analysis, Cause, Clock, ParsedReport, Settings, TimingPath } from './types.ts'
+import type { Analysis, Cause, Clock, ParsedReport, Format, ReportMeta, Settings, TimingPath } from './types.ts'
 import { DEFAULT_SETTINGS } from './types.ts'
 
 export const CAUSES: Record<Cause, { label: string; short: string }> = {
+  noclock: { label: 'No clock constraint: timed against a default 1 ns clock', short: 'No clock constraint' },
   cdc: { label: 'Clock-domain crossing without a constraint', short: 'Unconstrained CDC' },
   io: { label: 'I/O constraint missing or too tight', short: 'I/O constraint' },
-  logic: { label: 'Too many levels of logic', short: 'Logic depth' },
+  edge: { label: 'Opposite-edge transfer: only half the period is available', short: 'Half-cycle path' },
+  logic: { label: 'Data path too long for the clock period', short: 'Logic depth' },
   fanout: { label: 'High-fanout net', short: 'High fanout' },
   skew: { label: 'Clock skew or uncertainty dominated', short: 'Clock skew' },
   route: { label: 'Placement and routing delay', short: 'Routing' },
@@ -18,9 +20,19 @@ export interface Classified extends TimingPath {
   cross: boolean
 }
 
-export interface ClockStat { clock: string; period: number | null; wns: number; tns: number; failing: number; total: number; holdWns: number | null; holdTns: number; fmax: number | null }
+export interface ClockStat {
+  clock: string; period: number | null; wns: number; tns: number; failing: number; total: number; holdWns: number | null; holdTns: number
+  /** MHz. Taken from the tool's own Fmax summary when the report has one, else estimated from same-clock setup slack. */
+  fmax: number | null
+  fmaxFrom: 'report' | 'estimate' | null
+  /** Failing setup endpoints the tool reports for this clock, which can exceed the paths listed in the export */
+  endpoints?: number
+  /** Timed against the 1 ns placeholder from derive_clocks -period 1.0 */
+  isDefault: boolean
+}
 export interface Group { key: string; label: string; launch: string; latch: string; paths: string[]; failing: number; wns: number; tns: number }
 export interface Crossing { launch: string; latch: string; status: 'cut' | 'related' | 'unconstrained'; cutBy: number | null; paths: number; failing: number; wns: number; toBuses: { bus: string; width: number; synchronized: boolean }[] }
+export interface Retimed { clock: string; from: number; to: number; sdcName: string }
 export interface CauseStat { cause: Cause; paths: string[]; wns: number; tns: number }
 
 export interface Result {
@@ -38,6 +50,23 @@ export interface Result {
   holdTns: number
   failing: number
   total: number
+  /** Clock definitions the analysis used: report clocks, SDC clocks and SDC periods applied to default clocks */
+  clockDefs: Clock[]
+  meta: ReportMeta
+  /** Design-wide failing endpoint counts from the tool, when it reports them. Listed paths are usually a subset. */
+  endpoints: { failing: number; total: number; holdFailing: number } | null
+  /** Clocks still on the derive_clocks 1 ns placeholder */
+  defaultClocks: string[]
+  /** Default clocks given a real period by the SDC; same-clock setup slack is re-estimated for them */
+  retimed: Retimed[]
+  /** The report has summaries but no path tables */
+  summaryOnly: boolean
+  /** Unconstrained port counts when the report gives numbers but no names */
+  portCounts: { inputs: number; outputs: number } | null
+  /** Nodes the tool found driving clock pins without any clock constraint */
+  unconstrainedClocks: string[]
+  format: Format
+  hasSdc: boolean
 }
 
 /** `u_rx|data[3]` -> `u_rx|data[*]` so register buses group together. */
@@ -70,7 +99,16 @@ export function mergeClocks(report: Clock[], sdc: SdcModel | null): Clock[] {
   return out
 }
 
-export function classify(p: TimingPath, ctx: { clocks: Clock[]; sdc: SdcModel | null; ports: Set<string>; s: Settings }): Classified {
+const tooLong = (p: TimingPath) => p.dataDelay !== undefined && p.relationship !== undefined && p.dataDelay >= p.relationship
+
+/** Launch and latch on opposite edges of the same clock: the requirement is half the period. */
+export function isHalfCycle(p: TimingPath, clocks: Clock[]) {
+  if (p.analysis !== 'setup' || p.relationship === undefined || !p.launch) return false
+  const a = clocks.find(c => c.name === p.launch)?.period, b = clocks.find(c => c.name === p.latch)?.period
+  return !!a && a === b && Math.abs(p.relationship - a / 2) <= a * 0.02
+}
+
+export function classify(p: TimingPath, ctx: { clocks: Clock[]; sdc: SdcModel | null; ports: Set<string>; s: Settings; defaults?: Set<string> }): Classified {
   const cross = !!p.launch && !!p.latch && p.launch !== p.latch
   const cutBy = cross ? clocksCut(ctx.sdc, p.launch, p.latch) ?? pathCut(ctx.sdc, p.from, p.to) : pathCut(ctx.sdc, p.from, p.to)
   const base: Classified = { ...p, cause: null, cutBy, cross }
@@ -78,11 +116,21 @@ export function classify(p: TimingPath, ctx: { clocks: Clock[]; sdc: SdcModel | 
   const s = ctx.s
   let cause: Cause
   const unrelated = cross && rootClock(p.launch, ctx.clocks) !== rootClock(p.latch, ctx.clocks)
-  if (isPort(p.from, ctx.ports) || isPort(p.to, ctx.ports) || !p.launch || !p.latch) cause = 'io'
+  if (ctx.defaults?.has(p.latch) || ctx.defaults?.has(p.launch)) cause = 'noclock'
+  else if (isPort(p.from, ctx.ports) || isPort(p.to, ctx.ports) || !p.launch || !p.latch) cause = 'io'
   else if (unrelated) cause = 'cdc'
+  // Hold and removal fail when the latch clock arrives later than the data: more logic cannot cause it.
+  else if (p.analysis === 'hold' || p.analysis === 'removal') cause = 'skew'
+  else if (isHalfCycle(p, ctx.clocks)) cause = 'edge'
   else if ((p.levels ?? 0) > s.maxLevels) cause = 'logic'
   else if ((p.fanout ?? 0) >= s.maxFanout) cause = 'fanout'
-  else if (Math.abs(p.skew ?? 0) + (p.uncertainty ?? 0) >= Math.abs(p.slack) * 0.5 && Math.abs(p.skew ?? 0) > 0.05) cause = 'skew'
+  // Skew is only to blame when the data path alone would fit in the requirement.
+  else if (Math.abs(p.skew ?? 0) + (p.uncertainty ?? 0) >= Math.abs(p.slack) * 0.5 && Math.abs(p.skew ?? 0) > 0.05 && !tooLong(p)) cause = 'skew'
+  // Summary tables carry no logic depth or fanout. A data path longer than its requirement needs
+  // restructuring whatever it is made of.
+  else if (p.levels === undefined && p.fanout === undefined && tooLong(p)) cause = 'logic'
+  // Few levels but mostly cell delay: a RAM, DSP or carry chain without an output register.
+  else if (p.logicDelay !== undefined && p.dataDelay && p.logicDelay / p.dataDelay >= 0.6) cause = 'logic'
   else cause = 'route'
   return { ...base, cause }
 }
@@ -105,14 +153,29 @@ export interface Inputs { report: ParsedReport; sdcText?: string; settings?: Par
 export function analyze({ report, sdcText, settings }: Inputs): Result {
   const s = { ...DEFAULT_SETTINGS, ...settings }
   const sdc = sdcText?.trim() ? parseSdc(sdcText) : null
-  const clocks = mergeClocks(report.clocks, sdc)
+  const isMax = (a: Analysis) => a === 'setup' || a === 'recovery'
+
+  // A clock Quartus invented at 1 ns gets its real period as soon as the SDC constrains the same port.
+  const retimed: Retimed[] = []
+  for (const d of report.defaultClocks ?? []) {
+    const c = sdc?.clocks.find(x => x.kind !== 'generated' && x.kind !== 'virtual' && Number.isFinite(x.period) && x.period > 0 && (x.name === d || x.source === d))
+    const from = report.clocks.find(x => x.name === d)?.period ?? 1
+    if (c && c.period !== from) retimed.push({ clock: d, from, to: c.period, sdcName: c.name })
+  }
+  const shift = new Map(retimed.map(x => [x.clock, x]))
+  const defaults = new Set((report.defaultClocks ?? []).filter(d => !shift.has(d)))
+  const alias = new Set(retimed.filter(x => x.sdcName !== x.clock).map(x => x.sdcName))
+  const clocks = mergeClocks(report.clocks, sdc).filter(c => !alias.has(c.name)).map(c => shift.has(c.name) ? { ...c, period: shift.get(c.name)!.to } : c)
+
   const ports = new Set(report.unconstrained.filter(u => u.kind !== 'clock').map(u => u.name))
   for (const d of sdc?.io ?? []) for (const p of d.ports.patterns) ports.add(p)
-  const ctx = { clocks, sdc, ports, s }
-  const all = report.paths.filter(p => s.includeHold || p.analysis === 'setup' || p.analysis === 'recovery').map(p => classify(p, ctx))
+  const ctx = { clocks, sdc, ports, s, defaults }
+  const all = report.paths.filter(p => s.includeHold || isMax(p.analysis)).map(p => {
+    const x = p.launch === p.latch && isMax(p.analysis) ? shift.get(p.latch) : undefined
+    return classify(x ? { ...p, slack: round(p.slack + x.to - x.from), relationship: p.relationship === x.from ? x.to : p.relationship } : p, ctx)
+  })
   const live = all.filter(p => p.cutBy === null)
   const failing = live.filter(p => p.slack < 0)
-  const isMax = (a: Analysis) => a === 'setup' || a === 'recovery'
 
   const period = (c: string) => clocks.find(x => x.name === c)?.period ?? null
   const clockNames = [...new Set([...live.map(p => p.latch).filter(Boolean), ...clocks.filter(c => c.kind !== 'virtual').map(c => c.name)])]
@@ -120,16 +183,27 @@ export function analyze({ report, sdcText, settings }: Inputs): Result {
     const mine = live.filter(p => p.latch === c)
     const setup = mine.filter(p => isMax(p.analysis))
     const hold = mine.filter(p => !isMax(p.analysis))
-    const fromSummary = report.summary.find(x => x.clock === c && x.analysis === 'setup')
-    const wns = setup.length ? Math.min(...setup.map(p => p.slack)) : fromSummary?.slack ?? Infinity
+    // The tool's own per-clock summary covers every endpoint, not just the listed paths. It goes stale
+    // once the SDC in the app cuts paths on this clock.
+    const trust = !all.some(p => p.cutBy !== null && p.latch === c)
+    const sum = (a: Analysis) => trust ? report.summary.find(x => x.clock === c && x.analysis === a) : undefined
+    const moved = shift.get(c)
+    // A retimed clock keeps its summary slack, shifted by the period change; its total is no longer known.
+    const sumS = moved && sum('setup') ? { ...sum('setup')!, slack: sum('setup')!.slack + moved.to - moved.from, tns: 0 } : sum('setup')
+    const sumH = s.includeHold ? sum('hold') : undefined
+    const wns = Math.min(setup.length ? Math.min(...setup.map(p => p.slack)) : Infinity, sumS?.slack ?? Infinity)
     const same = setup.filter(p => p.launch === c)
     const per = period(c)
+    const reported = report.fmax?.find(x => x.clock === c)
+    const est = per && same.length ? fmax(per, Math.min(...same.map(p => p.slack))) : null
+    const holdWns = Math.min(hold.length ? Math.min(...hold.map(p => p.slack)) : Infinity, sumH?.slack ?? Infinity)
     return {
-      clock: c, period: per, wns: round(wns), tns: round(setup.length ? sumNeg(setup) : fromSummary?.tns ?? 0),
+      clock: c, period: per, wns: round(wns), tns: round(Math.min(sumNeg(setup), sumS?.tns ?? 0)),
       failing: mine.filter(p => p.slack < 0).length, total: mine.length,
-      holdWns: hold.length ? round(Math.min(...hold.map(p => p.slack))) : null, holdTns: round(sumNeg(hold)),
-      fmax: per && same.length ? fmax(per, Math.min(...same.map(p => p.slack))) : null,
-    }
+      holdWns: Number.isFinite(holdWns) ? round(holdWns) : null, holdTns: round(Math.min(sumNeg(hold), sumH?.tns ?? 0)),
+      fmax: reported?.fmax ?? est, fmaxFrom: reported ? 'report' : est ? 'estimate' : null,
+      endpoints: sumS?.failing, isDefault: defaults.has(c),
+    } satisfies ClockStat
   }).sort((a, b) => a.wns - b.wns)
 
   const group = (keyOf: (p: Classified) => [string, string]) => {
@@ -163,25 +237,41 @@ export function analyze({ report, sdcText, settings }: Inputs): Result {
     const byBus = new Map<string, Set<string>>()
     for (const p of ps) byBus.set(bus(p.to), (byBus.get(bus(p.to)) ?? new Set()).add(bit(p.to) ?? '0'))
     const transfer = report.transfers.find(t => t.from === launch && t.to === latch)
+    // Vivado reports worst slack and failing endpoints per crossing even when no path is listed for it.
+    const told = cutBy === null && transfer ? { failing: (transfer.failing ?? 0) + (s.includeHold ? transfer.holdFailing ?? 0 : 0), wns: Math.min(transfer.wns ?? Infinity, s.includeHold ? transfer.holdWns ?? Infinity : Infinity) } : { failing: 0, wns: Infinity }
+    const wns = Math.min(ps.length ? Math.min(...ps.map(p => p.slack)) : Infinity, told.wns)
     return {
       launch, latch, cutBy, status: cutBy !== null || transfer?.falsePath ? 'cut' : related ? 'related' : 'unconstrained',
-      paths: Math.max(ps.length, transfer?.paths ?? 0), failing: ps.filter(p => p.slack < 0 && p.cutBy === null).length,
-      wns: ps.length ? Math.min(...ps.map(p => p.slack)) : 0,
+      paths: Math.max(ps.length, transfer?.paths ?? 0), failing: Math.max(ps.filter(p => p.slack < 0 && p.cutBy === null).length, told.failing),
+      wns: Number.isFinite(wns) ? wns : 0,
       toBuses: [...byBus.entries()].map(([b, bits]) => ({ bus: b, width: bits.size, synchronized: isSyncName(b) })),
     } satisfies Crossing
   }).sort((a, b) => (a.status === 'unconstrained' ? 0 : 1) - (b.status === 'unconstrained' ? 0 : 1) || a.wns - b.wns)
 
   const setupLive = live.filter(p => isMax(p.analysis))
   const holdLive = live.filter(p => !isMax(p.analysis))
+  // Design totals from the tool are exact until the SDC edited here cuts or retimes something.
+  const fresh = all.length === live.length && !retimed.length
+  const tot = fresh ? report.totals : undefined
+  const finite = (n: number, or: number | null) => Number.isFinite(n) ? round(n) : or
+  const names = report.unconstrained.filter((u): u is { kind: 'input' | 'output'; name: string } => u.kind !== 'clock' && !ioConstrained(sdc, u.name))
+  const counts = report.counts
   return {
     paths: all, clocks: clockStats, pairs, buses, causes, crossings,
     lint: sdc ? lintSdc(sdc, report.clocks, report.format) : [],
-    unconstrainedPorts: report.unconstrained.filter((u): u is { kind: 'input' | 'output'; name: string } => u.kind !== 'clock' && !ioConstrained(sdc, u.name)),
-    wns: round(setupLive.length ? Math.min(...setupLive.map(p => p.slack)) : Math.min(0, ...report.summary.filter(x => x.analysis === 'setup').map(x => x.slack))),
-    tns: round(setupLive.length ? sumNeg(setupLive) : report.summary.filter(x => x.analysis === 'setup').reduce((a, x) => a + x.tns, 0)),
-    holdWns: holdLive.length ? round(Math.min(...holdLive.map(p => p.slack))) : null,
-    holdTns: round(sumNeg(holdLive)),
+    unconstrainedPorts: names,
+    wns: finite(Math.min(...setupLive.map(p => p.slack), ...clockStats.map(c => c.wns), tot?.setup?.wns ?? Infinity), 0)!,
+    tns: round(Math.min(sumNeg(setupLive), clockStats.reduce((a, c) => a + c.tns, 0), tot?.setup?.tns ?? 0)),
+    holdWns: s.includeHold ? finite(Math.min(...holdLive.map(p => p.slack), ...clockStats.map(c => c.holdWns ?? Infinity), tot?.hold?.wns ?? Infinity), null) : null,
+    holdTns: s.includeHold ? round(Math.min(sumNeg(holdLive), clockStats.reduce((a, c) => a + c.holdTns, 0), tot?.hold?.tns ?? 0)) : 0,
     failing: failing.length, total: live.length,
+    clockDefs: clocks, meta: report.meta ?? {},
+    endpoints: tot?.setup ? { failing: tot.setup.failing, total: tot.setup.total, holdFailing: s.includeHold ? tot.hold?.failing ?? 0 : 0 } : null,
+    defaultClocks: [...defaults], retimed,
+    summaryOnly: !report.paths.length && report.summary.length > 0,
+    unconstrainedClocks: report.unconstrained.filter(u => u.kind === 'clock' && !sdc?.clocks.some(c => c.name === u.name || c.source === u.name)).map(u => u.name),
+    format: report.format, hasSdc: !!sdc,
+    portCounts: !report.unconstrained.some(u => u.kind !== 'clock') && !sdc?.io.length && ((counts?.inputPorts ?? 0) || (counts?.outputPorts ?? 0)) ? { inputs: counts?.inputPorts ?? 0, outputs: counts?.outputPorts ?? 0 } : null,
   }
 }
 
