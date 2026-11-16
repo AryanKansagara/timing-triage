@@ -48,9 +48,21 @@ function Overview({ project, run }: TabProps) {
       <div className="kpis">
         <Kpi label="Setup WNS" value={`${fmtNs(r.wns)} ns`} tone={r.wns < 0 ? 'bad' : 'good'} note={r.wns < 0 ? 'Worst negative slack' : 'Setup met'} />
         <Kpi label="Setup TNS" value={`${fmtNs(r.tns)} ns`} tone={r.tns < 0 ? 'bad' : 'good'} note="Sum of worst slack per endpoint" />
-        <Kpi label="Failing paths" value={`${r.failing}`} note={`of ${fmtN(r.total)} timed · ${r.paths.length - r.total} cut by SDC`} tone={r.failing ? 'bad' : 'good'} />
+        {r.endpoints
+          ? <Kpi label="Failing endpoints" value={fmtN(r.endpoints.failing + r.endpoints.holdFailing)} note={`of ${fmtN(r.endpoints.total)} in the design · ${r.failing} worst path${r.failing === 1 ? '' : 's'} listed in this export`} tone={r.endpoints.failing + r.endpoints.holdFailing ? 'bad' : 'good'} />
+          : r.summaryOnly
+            ? <Kpi label="Failing paths" value="—" note="This report has per-clock summaries but no path tables" />
+            : <Kpi label="Failing paths" value={`${r.failing}`} note={`of ${fmtN(r.total)} listed · ${r.paths.length - r.total} cut by SDC`} tone={r.failing ? 'bad' : 'good'} />}
         <Kpi label="Hold WNS" value={r.holdWns === null ? '—' : `${fmtNs(r.holdWns)} ns`} tone={r.holdWns !== null && r.holdWns < 0 ? 'bad' : undefined} note={r.holdWns === null ? 'No hold paths in report' : r.holdWns < 0 ? 'Hold violations' : 'Hold met'} />
       </div>
+      {r.defaultClocks.length > 0 && (
+        <div className="banner warn">
+          <span><b>{r.defaultClocks.join(', ')} {r.defaultClocks.length > 1 ? 'have' : 'has'} no clock constraint.</b> Quartus timed {r.defaultClocks.length > 1 ? 'them' : 'it'} at a default 1 ns (1000 MHz), so every slack below is against that placeholder. Give the clock its real period first.</span>
+          <Link href={`/app/p/${project.id}/fixes#noclock`} className="btn sm primary">Fix the clock</Link>
+        </div>
+      )}
+      {r.retimed.length > 0 && <div className="banner info">{r.retimed.map(x => `${x.clock} is re-timed from the report's ${fmtNs(x.from)} ns to ${fmtNs(x.to)} ns (${fmtN(1000 / x.to, 2)} MHz) from your SDC.`).join(' ')} Same-clock setup slack is shifted by the difference; recompile for exact numbers.</div>}
+      {r.summaryOnly && <div className="banner info"><span>This report has per-clock summaries but no path tables, so paths cannot be listed or classified. Export the failing paths with report_timing and import that file too.</span><Link href="/docs" className="btn sm outline">Export commands</Link></div>}
       {(lintErr > 0 || r.unconstrainedPorts.length > 0) && (
         <div className="banner warn">
           <span>{lintErr > 0 && <>{lintErr} constraint error{lintErr > 1 ? 's' : ''} in {project.sdcName}. </>}{r.unconstrainedPorts.length > 0 && <>{r.unconstrainedPorts.length} I/O port{r.unconstrainedPorts.length > 1 ? 's are' : ' is'} not constrained, so they are not timed at all.</>}</span>
@@ -84,34 +96,54 @@ function Overview({ project, run }: TabProps) {
           <div className="panel-head"><h2>Clocks</h2>{worstFmax && <span className="muted small">Tightest: {worstFmax.clock.split('|').slice(-1)[0]} at {fmtN(worstFmax.fmax!, 1)} MHz</span>}</div>
           <div className="table-wrap">
             <table>
-              <thead><tr><th>Clock</th><th className="num">Target</th><th className="num">WNS</th><th className="num">TNS</th><th className="num">Fail</th><th className="num">Fmax est.</th></tr></thead>
+              <thead><tr><th>Clock</th><th className="num">Target</th><th className="num">WNS</th><th className="num">TNS</th><th className="num" title="Failing endpoints reported by the tool, or failing paths listed when it reports none">Fail</th><th className="num">Fmax</th></tr></thead>
               <tbody>{r.clocks.map(c => (
                 <tr key={c.clock}>
                   <th className="mono clip" title={c.clock}>{c.clock}</th>
-                  <td className="num mono">{c.period ? `${fmtN(1000 / c.period, 2)} MHz` : '—'}</td>
+                  <td className="num mono">{c.isDefault ? <span className="warn-text" title="derive_clocks -period 1.0 placeholder">1000 MHz default</span> : c.period ? `${fmtN(1000 / c.period, 2)} MHz` : '—'}</td>
                   <td className={`num mono ${c.wns < 0 ? 'bad-text' : ''}`}>{Number.isFinite(c.wns) ? fmtNs(c.wns) : '—'}</td>
                   <td className="num mono">{fmtNs(c.tns)}</td>
-                  <td className="num">{c.failing}</td>
-                  <td className={`num mono ${c.fmax && c.period && c.fmax < 1000 / c.period ? 'bad-text' : ''}`}>{c.fmax ? fmtN(c.fmax, 1) : '—'}</td>
+                  <td className="num">{fmtN(c.endpoints ?? c.failing)}</td>
+                  <td className={`num mono ${c.fmax && c.period && !c.isDefault && c.fmax < 1000 / c.period ? 'bad-text' : ''}`} title={c.fmaxFrom === 'report' ? 'From the Fmax summary in the report' : c.fmaxFrom === 'estimate' ? 'Estimated from the worst same-clock setup slack' : undefined}>{c.fmax ? `${fmtN(c.fmax, 1)}${c.fmaxFrom === 'estimate' ? ' est.' : ''}` : '—'}</td>
                 </tr>
               ))}</tbody>
             </table>
           </div>
-          <p className="muted tiny">Fmax is estimated from the worst same-clock setup slack: 1000 / (period − WNS). Cross-clock paths are excluded.</p>
+          <p className="muted tiny">Fmax comes from the report&rsquo;s own Fmax summary when it has one. Values marked est. are 1000 / (period − worst same-clock setup slack); cross-clock paths are excluded. Clocks with no value have no timed paths.</p>
         </div>
         <WhatIf run={run} />
       </div>
+      <Messages run={run} />
     </>
   )
 }
 
+/** What the tool itself said: missing SDC, ignored constraints, check_timing findings. */
+function Messages({ run }: { run: TabProps['run'] }) {
+  const list = run.report.issues.filter((x, i, a) => x.level !== 'error' && a.findIndex(y => y.message === x.message) === i)
+  const m = run.r.meta
+  if (!list.length && !m.tool) return null
+  return (
+    <div className="panel">
+      <div className="panel-head"><h2>From the report</h2><span className="muted small">{[m.tool, m.design, m.device, m.state].filter(Boolean).join(' · ')}</span></div>
+      {!list.length ? <p className="muted small">The tool raised no constraint warnings in this report.</p> : <>
+        <div className="issues" role="list">{list.slice(0, 6).map((x, i) => <div key={i} role="listitem"><span className="ln">{x.line > 1 ? `line ${x.line}` : x.level}</span><span>{x.message}</span></div>)}</div>
+        {list.length > 6 && <details><summary className="small">{list.length - 6} more</summary><div className="issues" role="list">{list.slice(6, 60).map((x, i) => <div key={i} role="listitem"><span className="ln">{x.line > 1 ? `line ${x.line}` : x.level}</span><span>{x.message}</span></div>)}</div></details>}
+      </>}
+    </div>
+  )
+}
+
 function WhatIf({ run }: { run: TabProps['run'] }) {
-  const opts = run.r.clocks.filter(c => c.period)
+  const opts = run.r.clocks.filter(c => c.period && c.total > 0)
   const [clock, setClock] = useState(opts[0]?.clock ?? '')
   const st = opts.find(c => c.clock === clock)
   const base = st?.period ? 1000 / st.period : 100
-  const [mhz, setMhz] = useState(base)
-  useEffect(() => setMhz(Math.round(base * 100) / 100), [clock])
+  // A clock on the 1000 MHz placeholder starts at its Fmax; the slider has to reach down to it.
+  const start = st?.isDefault && st.fmax ? Math.floor(st.fmax * 100) / 100 : Math.round(base * 100) / 100
+  const lo = Math.max(0.5, Math.min(base, st?.fmax ?? base) * 0.5), hi = st?.isDefault && st.fmax ? st.fmax * 2 : Math.max(base, st?.fmax ?? 0) * 1.5
+  const [mhz, setMhz] = useState(start)
+  useEffect(() => setMhz(start), [clock, start])
   if (!st) return null
   const w = whatIfFrequency(run.r, clock, mhz)
   return (
@@ -119,10 +151,10 @@ function WhatIf({ run }: { run: TabProps['run'] }) {
       <div className="panel-head"><h2>Frequency what-if</h2></div>
       <label className="field"><span>Clock</span><select value={clock} onChange={e => setClock(e.target.value)}>{opts.map(c => <option key={c.clock} value={c.clock}>{c.clock}</option>)}</select></label>
       <label className="field"><span>Target frequency: <b className="mono">{fmtN(mhz, 2)} MHz</b> ({fmtNs(1000 / mhz)} ns)</span>
-        <input type="range" min={Math.max(1, base * 0.5)} max={base * 1.5} step={base / 200} value={mhz} onChange={e => setMhz(Number(e.target.value))} />
+        <input type="range" min={lo} max={hi} step={(hi - lo) / 400} value={mhz} onChange={e => setMhz(Number(e.target.value))} />
       </label>
       <div className="row gap-sm wrap">
-        <button type="button" className="btn sm ghost" onClick={() => setMhz(base)}>Target</button>
+        {!st.isDefault && <button type="button" className="btn sm ghost" onClick={() => setMhz(base)}>Target</button>}
         {st.fmax && <button type="button" className="btn sm ghost" onClick={() => setMhz(Math.floor(st.fmax! * 100) / 100)}>Fmax ({fmtN(st.fmax, 1)})</button>}
       </div>
       {w && (
@@ -212,19 +244,23 @@ function Paths({ run }: TabProps) {
           <div className="panel flush"><PathTable paths={list.slice(0, limit)} onOpen={setOpen} /></div>
           {list.length > limit && <button type="button" className="btn ghost" onClick={() => setLimit(l => l + 300)}>Show more ({list.length - limit} left)</button>}
         </>}
-      <Modal open={!!open} onClose={() => setOpen(null)} title="Path detail" wide>{open && <PathDetail p={open} />}</Modal>
+      <Modal open={!!open} onClose={() => setOpen(null)} title="Path detail" wide>{open && <PathDetail p={open} vivado={run.r.format === 'vivado'} />}</Modal>
     </>
   )
 }
 
-function PathDetail({ p }: { p: Classified }) {
-  const rows: [string, string | number | undefined][] = [['Analysis', p.analysis], ['From node', p.from], ['To node', p.to], ['Launch clock', p.launch || '(none)'], ['Latch clock', p.latch || '(none)'], ['Relationship', p.relationship !== undefined ? `${fmtNs(p.relationship)} ns` : undefined], ['Clock skew', p.skew !== undefined ? `${fmtNs(p.skew)} ns` : undefined], ['Data delay', p.dataDelay !== undefined ? `${fmtNs(p.dataDelay)} ns` : undefined], ['Data arrival', p.arrival !== undefined ? `${fmtNs(p.arrival)} ns` : undefined], ['Data required', p.required !== undefined ? `${fmtNs(p.required)} ns` : undefined], ['Logic levels', p.levels], ['Max data-path fanout', p.fanout], ['Source line', p.line]]
+function PathDetail({ p, vivado }: { p: Classified; vivado: boolean }) {
+  const share = p.logicDelay !== undefined && p.routeDelay !== undefined && p.dataDelay ? `${fmtNs(p.logicDelay)} ns cells (${Math.round(100 * p.logicDelay / p.dataDelay)}%) + ${fmtNs(p.routeDelay)} ns routing (${Math.round(100 * p.routeDelay / p.dataDelay)}%)` : undefined
+  const tcl = vivado
+    ? `report_timing -${p.analysis === 'hold' || p.analysis === 'removal' ? 'hold' : 'setup'} -from [get_pins {${p.from}}] -to [get_pins {${p.to}}] -max_paths 1 -name triage_path`
+    : `report_timing -${p.analysis} -from [get_keepers {${p.from}}] -to [get_keepers {${p.to}}] -npaths 1 -detail full_path -panel_name {Triage path}`
+  const rows: [string, string | number | undefined][] = [['Analysis', p.analysis], ['From node', p.from], ['To node', p.to], ['Launch clock', p.launch || '(none)'], ['Latch clock', p.latch || '(none)'], ['Relationship', p.relationship !== undefined ? `${fmtNs(p.relationship)} ns` : undefined], ['Clock skew', p.skew !== undefined ? `${fmtNs(p.skew)} ns` : undefined], ['Data delay', p.dataDelay !== undefined ? `${fmtNs(p.dataDelay)} ns` : undefined], ['Data arrival', p.arrival !== undefined ? `${fmtNs(p.arrival)} ns` : undefined], ['Data required', p.required !== undefined ? `${fmtNs(p.required)} ns` : undefined], ['Cells and routing', share], ['Logic levels', p.levels !== undefined && p.levelDetail ? `${p.levels} (${p.levelDetail})` : p.levels], ['Max data-path fanout', p.fanout], ['Clock uncertainty', p.uncertainty !== undefined ? `${fmtNs(p.uncertainty)} ns` : undefined], ['Worst corner', p.corner], ['Source line', p.line]]
   return (
     <div className="stack">
       <div className="row gap wrap"><b className={`slack-big mono ${p.slack < 0 ? 'bad-text' : 'good-text'}`}>{fmtNs(p.slack)} ns</b>{p.cause && <span className="cause-tag"><CauseDot cause={p.cause} />{CAUSES[p.cause].label}</span>}{p.cutBy !== null && <span className="kind">Cut by SDC line {p.cutBy}</span>}</div>
       {p.cause && <p className="muted">{CAUSE_HELP[p.cause]}</p>}
       <dl className="kv">{rows.filter(r => r[1] !== undefined && r[1] !== '').map(([k, v]) => <div key={k}><dt>{k}</dt><dd className="mono break">{v}</dd></div>)}</dl>
-      <Code label="Tcl: re-report this path in Timing Analyzer" code={`report_timing -${p.analysis} -from [get_keepers {${p.from}}] -to [get_keepers {${p.to}}] -npaths 1 -detail full_path -panel_name {Triage path}`} />
+      <Code label={vivado ? 'Tcl: re-report this path in Vivado' : 'Tcl: re-report this path in Timing Analyzer'} code={tcl} />
     </div>
   )
 }

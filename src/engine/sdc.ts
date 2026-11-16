@@ -262,6 +262,19 @@ export function lintSdc(m: SdcModel, reportClocks: Clock[] = [], tool: string = 
     }
   }
 
+  // Constraints that name a clock nobody defines are silently ignored by the tool.
+  if (reportClocks.length) {
+    const known = (pat: string) => all.some(n => glob(pat, n))
+    const refs: [number, string][] = [
+      ...m.groups.flatMap(g => g.groups.filter(x => x.kind === 'get_clocks').flatMap(x => x.patterns.map(p => [g.line, p] as [number, string]))),
+      ...m.falsePaths.flatMap(f => [f.from, f.to].filter(clockSide).flatMap(c => c!.patterns.map(p => [f.line, p] as [number, string]))),
+      ...m.io.filter(d => d.clock).map(d => [d.line, d.clock!] as [number, string]),
+    ]
+    const byLine = new Map<number, string[]>()
+    for (const [line, pat] of refs) if (pat && !known(pat)) byLine.set(line, [...new Set([...(byLine.get(line) ?? []), pat])])
+    for (const [line, pats] of byLine) add('unknown_clock', line, 'warn', `${pats.join(', ')} ${pats.length > 1 ? 'are' : 'is'} not a clock in the SDC or in the timing report, so this constraint matches nothing and is ignored.`)
+  }
+
   for (const f of m.falsePaths) {
     const pats = [...(f.from?.patterns ?? []), ...(f.to?.patterns ?? [])]
     if (!f.from && !f.to && !f.through) add('broad_false_path', f.line, 'error', 'set_false_path with no -from, -to or -through cuts every path in the design.')

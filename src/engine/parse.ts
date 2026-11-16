@@ -40,12 +40,15 @@ export function quartusTables(text: string): Table[] {
   const out: Table[] = []
   let context = ''
   let cur: Table | null = null
-  let rowsSeen = 0
+  let rowsSeen = 0, afterBorder = false
   for (let i = 0; i < lines.length; i++) {
     const l = lines[i]
-    if (isBorder(l)) continue
+    if (isBorder(l)) { afterBorder = true; continue }
     if (/^\s*;.*;\s*$/.test(l)) {
       const c = cells(l)
+      // Pasted text often loses the blank lines between tables: a one-cell row right after a border is a new title.
+      if (cur && cur.rows.length && c.length === 1 && afterBorder) { out.push(cur); cur = null }
+      afterBorder = false
       if (!cur) { cur = { title: '', header: [], rows: [], line: i + 1, context }; rowsSeen = 0 }
       rowsSeen++
       if (rowsSeen === 1 && c.length === 1) cur.title = c[0]

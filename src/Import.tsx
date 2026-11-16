@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { detectFormat, parseReport } from './engine/parse.ts'
+import { samples } from './engine/sample.ts'
 import { lintSdc, parseSdc } from './engine/sdc.ts'
 import { snapshot } from './engine/snapshot.ts'
 import type { Format, Issue, ParsedReport } from './engine/types.ts'
@@ -62,10 +63,13 @@ export default function DataTab({ project, ds, run, update }: { project: Project
     } finally { setBusy(false) }
   }
 
+  const real = samples().find(s => s.id === project.sampleId)?.real
   if (project.sampleId) return (
     <div className="panel">
-      <h2>Synthetic sample</h2>
-      <p>This design&rsquo;s reports are generated (labelled synthetic) and rebuilt on every load. To analyze your own Quartus or Vivado reports, start a new design.</p>
+      <h2>{real ? 'Public report' : 'Synthetic sample'}</h2>
+      {real
+        ? <p>This design&rsquo;s report is a published file from <a href={real.url} target="_blank" rel="noreferrer">{real.credit}</a>, used under the {real.licence} licence. It is shortened but otherwise unchanged; see Docs for what was left out. To analyze your own Quartus or Vivado reports, start a new design.</p>
+        : <p>This design&rsquo;s reports are generated (labelled synthetic) and rebuilt on every load. To analyze your own Quartus or Vivado reports, start a new design.</p>}
       <div className="row gap wrap">
         <button type="button" className="btn primary" onClick={async () => { const p = await createBlankProject('My design'); go(`/app/p/${p.id}/data`) }}>New design</button>
         <Link href="/docs" className="btn ghost">How to export reports</Link>
@@ -120,7 +124,7 @@ export default function DataTab({ project, ds, run, update }: { project: Project
 function Validation({ f, onRemove }: { f: Staged; onRemove(): void }) {
   const r = f.report
   const issues: Issue[] = r?.issues ?? []
-  const ok = f.format === 'sdc' || (r && (r.paths.length || r.clocks.length))
+  const ok = f.format === 'sdc' || (r && (r.paths.length || r.clocks.length || r.summary.length))
   return (
     <div className={`validation ${ok ? 'ok' : 'bad'}`}>
       <div className="row between gap-sm wrap">
@@ -129,7 +133,7 @@ function Validation({ f, onRemove }: { f: Staged; onRemove(): void }) {
       </div>
       {f.sdcInfo && <p className="small">{f.sdcInfo.stmts} commands, {f.sdcInfo.clocks} clocks, {f.sdcInfo.lint} lint finding{f.sdcInfo.lint === 1 ? '' : 's'}. Will replace the current constraints.</p>}
       {r && (r.paths.length > 0 || r.clocks.length > 0) && <>
-        <p className="small">{r.paths.length} paths ({r.paths.filter(p => p.slack < 0).length} negative slack) · {r.clocks.length} clocks · {r.unconstrained.length} unconstrained items. Found: {r.found.join(', ') || 'nothing'}.</p>
+        <p className="small">{[r.meta?.tool, r.meta?.design, r.meta?.device].filter(Boolean).join(' · ')}{r.meta?.tool ? '. ' : ''}{r.paths.length} paths ({r.paths.filter(p => p.slack < 0).length} negative slack) · {r.clocks.length} clocks · {r.unconstrained.length} unconstrained items. Found: {r.found.join(', ') || 'nothing'}.</p>
         {r.paths.length > 0 && <div className="map-grid" aria-label="Field mapping">
           {FIELDS.map(([k, l]) => {
             const n = r.paths.filter(p => p[k] !== undefined && p[k] !== '').length

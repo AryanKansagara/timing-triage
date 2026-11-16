@@ -86,7 +86,7 @@ export function Landing() {
               <Link href="/app?sample=vga-uart" className="btn primary lg">Open the sample design</Link>
               <Link href="/app" className="btn outline lg">Import your report</Link>
             </div>
-            <p className="hero-note">Runs in your browser. No account needed. Sample data is synthetic.</p>
+            <p className="hero-note">Runs in your browser. No account needed. Samples include two real public reports.</p>
           </div>
           <HeroDemo />
         </div>

@@ -1,9 +1,15 @@
 // Synthetic sample designs. Every number here is generated; the reports are rendered in the same
 // text format the real tools write, so the samples go through the same parsers as your files.
+import { AVR_CPU_STA } from './fixtures/avrCpu.ts'
+import { RED_PITAYA_TIMING, RED_PITAYA_XDC } from './fixtures/redPitaya.ts'
 import type { Analysis, Clock } from './types.ts'
 
 export interface SamplePath { analysis: Analysis; slack: number; from: string; to: string; launch: string; latch: string; rel: number; skew: number; delay: number; levels: number; fanout: number }
-export interface SampleDef { id: string; name: string; blurb: string; device: string; format: 'quartus' | 'vivado'; report: string; sdc: string; sdcName: string; reportName: string }
+export interface SampleDef {
+  id: string; name: string; blurb: string; device: string; format: 'quartus' | 'vivado'; report: string; sdc: string; sdcName: string; reportName: string
+  /** Set for reports published in a public repository, as opposed to generated ones */
+  real?: { credit: string; url: string; licence: string }
+}
 
 function rng(seed: number) {
   return () => { seed |= 0; seed = seed + 0x6d2b79f5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296 }
@@ -211,6 +217,18 @@ export function samples(): SampleDef[] {
       blurb: 'The same crossing ported to Vivado: report_timing_summary text with an MMCM pixel clock and an unconstrained UART crossing.',
       reportName: 'timing_summary.rpt', sdcName: 'arty_uart_vga.xdc', sdc: ARTY_XDC,
       report: renderVivado(a.paths, a.clocks, 'arty_uart_vga'),
+    },
+    {
+      id: 'avr-cpu', name: 'AVR CPU core, no SDC (real Quartus report)', device: 'EP4CE22F17C6, Cyclone IV E', format: 'quartus',
+      blurb: 'A published .sta.rpt with no constraints file: Quartus times the clock at a default 1000 MHz and reports -14.7 ns. The design really runs at 63.5 MHz.',
+      reportName: 'MCU.sta.rpt', sdcName: 'MCU.sdc', sdc: '', report: AVR_CPU_STA,
+      real: { credit: 'nanamake/avr_cpu, © 2018 NAMAKE Nanamaru', url: 'https://github.com/nanamake/avr_cpu', licence: 'MIT' },
+    },
+    {
+      id: 'red-pitaya', name: 'Red Pitaya DSP, 11,287 failing endpoints (real Vivado report)', device: 'xc7z010clg400-1, Zynq-7000', format: 'vivado',
+      blurb: 'A published post-route report_timing_summary: an IIR filter path through two DSP48s and 14 carry cells at 125 MHz, plus a hold failure on the ADC inputs.',
+      reportName: 'post_route_timing_summary.rpt', sdcName: 'red_pitaya.xdc', sdc: RED_PITAYA_XDC, report: RED_PITAYA_TIMING,
+      real: { credit: 'pyrpl-fpga/pyrpl, © 2014-2025 PyRPL authors', url: 'https://github.com/pyrpl-fpga/pyrpl', licence: 'MIT' },
     },
   ]
   return cache

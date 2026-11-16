@@ -64,14 +64,15 @@ export async function createSampleProject(sampleId: string): Promise<Project> {
     const r = { ...run.report, paths: run.report.paths.map(p => ({ ...p, slack: p.slack < 0.6 ? Math.round((p.slack - shift - (p.levels ?? 0) * extra) * 1000) / 1000 : p.slack })) }
     return analyze({ report: r, sdcText: def.sdc, settings: base.settings })
   }
-  const snapshots = [
+  // Published reports get one honest run; only the generated designs get a made-up history.
+  const snapshots = def.real ? [snapshot(run.r, uuid(), 'Report as published', now)] : [
     snapshot(worse(0.9, 0.06), uuid(), 'First full compile', now - 20 * DAY),
     snapshot(worse(0.35, 0.02), uuid(), 'After moving the UART FIFO', now - 9 * DAY),
     snapshot(run.r, uuid(), 'Current report', now - 2 * DAY),
   ]
   return saveProject({
     id: uuid(), name: def.name, createdAt: now, updatedAt: now, sampleId, sdc: def.sdc, sdcName: def.sdcName, settings: base.settings, snapshots, applied: [],
-    imports: [{ id: uuid(), fileName: `${def.reportName} (synthetic)`, format: def.format, paths: run.report.paths.length, issues: 0, at: now - 2 * DAY }],
+    imports: [{ id: uuid(), fileName: def.real ? `${def.reportName} (${def.real.credit.split(',')[0]})` : `${def.reportName} (synthetic)`, format: def.format, paths: run.report.paths.length, issues: run.report.issues.length, at: def.real ? now : now - 2 * DAY }],
   })
 }
 

@@ -1,3 +1,4 @@
+import { samples } from './engine/sample.ts'
 import { useEffect, useRef, useState, useSyncExternalStore, type AnchorHTMLAttributes, type ReactNode } from 'react'
 import { cloudConfigured, deleteAccount, deleteCloudData, exportAll, signIn, signOut, signUp, syncNow, useSync, type SyncStatus } from './sync.ts'
 
@@ -313,3 +314,8 @@ export function Empty({ title, children, icon }: { title: string; children?: Rea
 }
 
 export const SyntheticBadge = () => <span className="badge synthetic" title="Generated data, not a real design">Synthetic</span>
+/** Badge for a sample design: generated ones say so, published reports credit their source. */
+export function SampleBadge({ id }: { id: string }) {
+  const real = samples().find(s => s.id === id)?.real
+  return real ? <span className="badge low" title={`Published report from ${real.credit} (${real.licence})`}>Public report</span> : <SyntheticBadge />
+}

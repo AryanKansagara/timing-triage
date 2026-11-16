@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import { SlackHistogram } from './charts.tsx'
 import { CAUSES } from './engine/analyze.ts'
 import { causeLabel } from './engine/fixes.ts'
+import { samples } from './engine/sample.ts'
 import { useProject, useRun } from './projectData.ts'
 import { fmtN, fmtNs, Link } from './ui.tsx'
 
@@ -12,6 +13,7 @@ export default function Report({ id }: { id: string }) {
   if (loading) return <div className="boot"><span className="spinner" /> Building report</div>
   if (!project || !run) return <section className="report"><p>Nothing to report yet. <Link href={project ? `/app/p/${id}/data` : '/app'}>Import a report</Link>.</p></section>
   const { r, fixes } = run
+  const real = samples().find(s => s.id === project.sampleId)?.real
   const snaps = [...project.snapshots].sort((a, b) => a.at - b.at)
   return (
     <article className="report">
@@ -20,21 +22,23 @@ export default function Report({ id }: { id: string }) {
         <button type="button" className="btn primary" onClick={() => print()}>Print or save as PDF</button>
       </div>
       <header>
-        <div className="eyebrow">Timing closure report{project.sampleId ? ' · synthetic sample' : ''}</div>
+        <div className="eyebrow">Timing closure report{real ? ` · public report from ${real.credit} (${real.licence})` : project.sampleId ? ' · synthetic sample' : ''}</div>
         <h1>{project.name}</h1>
-        <p className="muted">{new Date().toLocaleDateString('en-US', { dateStyle: 'long' })} · {run.report.format === 'vivado' ? 'Vivado' : 'Quartus Timing Analyzer'} report · constraints: {project.sdcName}</p>
+        <p className="muted">{new Date().toLocaleDateString('en-US', { dateStyle: 'long' })} · {r.meta.tool ?? (run.report.format === 'vivado' ? 'Vivado' : 'Quartus Timing Analyzer')} report{r.meta.design ? ` · ${r.meta.design}` : ''}{r.meta.device ? ` · ${r.meta.device}` : ''} · constraints: {project.sdc.trim() ? project.sdcName : 'none'}</p>
+        {r.defaultClocks.length > 0 && <p><b>{r.defaultClocks.join(', ')} has no clock constraint.</b> The tool timed it at a default 1 ns (1000 MHz); slack in this report is against that placeholder.</p>}
+        {r.retimed.length > 0 && <p>{r.retimed.map(x => `${x.clock} re-timed from ${fmtNs(x.from)} ns to ${fmtNs(x.to)} ns from the SDC`).join('; ')}. Same-clock setup slack is estimated until the design is recompiled.</p>}
       </header>
       <div className="kpis">
         <div className="kpi"><small>Setup WNS</small><b className="mono">{fmtNs(r.wns)} ns</b></div>
         <div className="kpi"><small>Setup TNS</small><b className="mono">{fmtNs(r.tns)} ns</b></div>
-        <div className="kpi"><small>Failing paths</small><b>{r.failing}</b><p>of {fmtN(r.total)}</p></div>
+        {r.endpoints ? <div className="kpi"><small>Failing endpoints</small><b>{fmtN(r.endpoints.failing + r.endpoints.holdFailing)}</b><p>of {fmtN(r.endpoints.total)} · {r.failing} listed</p></div> : <div className="kpi"><small>Failing paths</small><b>{r.summaryOnly ? '—' : r.failing}</b><p>{r.summaryOnly ? 'summaries only' : `of ${fmtN(r.total)} listed`}</p></div>}
         <div className="kpi"><small>Hold WNS</small><b className="mono">{r.holdWns === null ? '—' : `${fmtNs(r.holdWns)} ns`}</b></div>
       </div>
       <h2>Slack distribution</h2>
       <SlackHistogram paths={r.paths} height={200} width={900} />
       <h2>Clocks</h2>
       <table>
-        <thead><tr><th>Clock</th><th className="num">Target MHz</th><th className="num">WNS</th><th className="num">TNS</th><th className="num">Failing</th><th className="num">Fmax est.</th></tr></thead>
+        <thead><tr><th>Clock</th><th className="num">Target MHz</th><th className="num">WNS</th><th className="num">TNS</th><th className="num">Failing</th><th className="num">Fmax</th></tr></thead>
         <tbody>{r.clocks.map(c => <tr key={c.clock}><td className="mono small">{c.clock}</td><td className="num">{c.period ? fmtN(1000 / c.period, 2) : '—'}</td><td className="num mono">{Number.isFinite(c.wns) ? fmtNs(c.wns) : '—'}</td><td className="num mono">{fmtNs(c.tns)}</td><td className="num">{c.failing}</td><td className="num">{c.fmax ? fmtN(c.fmax, 1) : '—'}</td></tr>)}</tbody>
       </table>
       <h2>Root causes</h2>

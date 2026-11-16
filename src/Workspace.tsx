@@ -3,7 +3,7 @@ import { samples } from './engine/sample.ts'
 import { createBlankProject, createSampleProject } from './projectData.ts'
 import { deleteProject, saveProject, useProjects, type Project } from './store.ts'
 import { useSync } from './sync.ts'
-import { ask, fmtNs, go, Link, SyntheticBadge, toast } from './ui.tsx'
+import { ask, fmtNs, go, Link, SampleBadge, toast } from './ui.tsx'
 
 export default function Workspace() {
   const list = useProjects()
@@ -28,7 +28,7 @@ export default function Workspace() {
     go(`/app/p/${p.id}/data`)
   }
 
-  if (list === null || busy) return <div className="boot" role="status"><span className="spinner" /> {busy ? 'Generating the synthetic report' : 'Opening your designs'}</div>
+  if (list === null || busy) return <div className="boot" role="status"><span className="spinner" /> {busy ? 'Opening the sample report' : 'Opening your designs'}</div>
 
   return (
     <section className="page">
@@ -46,11 +46,11 @@ export default function Workspace() {
           <article className="onboard-card feature-card">
             <div className="eyebrow">One minute</div>
             <h2>Try the sample</h2>
-            <p>Synthetic designs with the classic closure problems planted: a UART byte crossing into a PLL pixel clock with no constraint, an alpha-blend cone 14 levels deep, a reset with 1,452 loads. Labelled synthetic.</p>
+            <p>Two real reports published in public repositories (a Quartus compile with no SDC, and a Vivado design with 11,287 failing endpoints), plus two synthetic designs with the classic closure problems planted. Each is labelled.</p>
             <div className="stack-sm">
               {samples().map(s => (
                 <button key={s.id} type="button" className="sample-btn" onClick={() => void openSample(s.id)}>
-                  <span><strong>{s.name}</strong><small>{s.blurb}</small></span><span aria-hidden="true">&rarr;</span>
+                  <span><strong>{s.name}</strong><small>{s.blurb}{s.real ? ` Source: ${s.real.credit.split(',')[0]} (${s.real.licence}).` : ' Synthetic.'}</small></span><span aria-hidden="true">&rarr;</span>
                 </button>
               ))}
             </div>
@@ -92,7 +92,7 @@ function ProjectCard({ p }: { p: Project }) {
             <input name="n" defaultValue={p.name} autoFocus aria-label="Design name" onBlur={e => e.currentTarget.form?.requestSubmit()} />
           </form>
         ) : <h3><Link href={`/app/p/${p.id}`}>{p.name}</Link></h3>}
-        {p.sampleId && <SyntheticBadge />}
+        {p.sampleId && <SampleBadge id={p.sampleId} />}
       </div>
       <dl className="mini-stats">
         <div><dt>WNS</dt><dd className={`mono ${last && last.wns < 0 ? 'bad-text' : ''}`}>{last ? fmtNs(last.wns) : '—'}</dd></div>

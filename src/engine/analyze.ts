@@ -124,8 +124,8 @@ export function classify(p: TimingPath, ctx: { clocks: Clock[]; sdc: SdcModel | 
   else if (isHalfCycle(p, ctx.clocks)) cause = 'edge'
   else if ((p.levels ?? 0) > s.maxLevels) cause = 'logic'
   else if ((p.fanout ?? 0) >= s.maxFanout) cause = 'fanout'
-  // Skew is only to blame when the data path alone would fit in the requirement.
-  else if (Math.abs(p.skew ?? 0) + (p.uncertainty ?? 0) >= Math.abs(p.slack) * 0.5 && Math.abs(p.skew ?? 0) > 0.05 && !tooLong(p)) cause = 'skew'
+  // Skew is to blame when removing it (and the uncertainty) would close the path, and the data path alone fits.
+  else if (Math.abs(p.skew ?? 0) + (p.uncertainty ?? 0) >= Math.abs(p.slack) && Math.abs(p.skew ?? 0) > 0.05 && !tooLong(p)) cause = 'skew'
   // Summary tables carry no logic depth or fanout. A data path longer than its requirement needs
   // restructuring whatever it is made of.
   else if (p.levels === undefined && p.fanout === undefined && tooLong(p)) cause = 'logic'

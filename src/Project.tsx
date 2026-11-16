@@ -2,7 +2,7 @@ import { lazy, Suspense, useEffect, useState } from 'react'
 import { snapshot } from './engine/snapshot.ts'
 import { useProject, useRun, type Run } from './projectData.ts'
 import { uuid, type Dataset, type Project } from './store.ts'
-import { Empty, fmtNs, go, isTyping, Link, Modal, SyntheticBadge, toast } from './ui.tsx'
+import { Empty, fmtNs, go, isTyping, Link, Modal, SampleBadge, toast } from './ui.tsx'
 
 const Tabs = lazy(() => import('./Tabs.tsx'))
 const DataTab = lazy(() => import('./Import.tsx'))
@@ -53,8 +53,8 @@ export default function ProjectView({ id, tab: rawTab }: { id: string; tab: stri
       <div className="proj-head">
         <div>
           <div className="eyebrow"><Link href="/app">Designs</Link></div>
-          <h1 className="row gap wrap">{project.name} {project.sampleId && <SyntheticBadge />}</h1>
-          {run && !empty && <p className="muted small mono" style={{ margin: 0 }}>{run.report.format === 'vivado' ? 'Vivado' : 'Quartus'} · {run.r.total} paths · WNS {fmtNs(run.r.wns)} ns · TNS {fmtNs(run.r.tns)} ns</p>}
+          <h1 className="row gap wrap">{project.name} {project.sampleId && <SampleBadge id={project.sampleId} />}</h1>
+          {run && !empty && <p className="muted small mono" style={{ margin: 0 }}>{run.r.meta.tool ?? (run.report.format === 'vivado' ? 'Vivado' : 'Quartus')}{run.r.meta.device ? ` · ${run.r.meta.device}` : ''} · {run.r.total} paths · WNS {fmtNs(run.r.wns)} ns · TNS {fmtNs(run.r.tns)} ns</p>}
         </div>
         {!empty && (
           <div className="toolbar">
