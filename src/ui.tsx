@@ -290,8 +290,8 @@ export function Footer() {
       <div className="footer-inner">
         <div className="footer-brand"><Monogram /> <strong>Timing Triage</strong></div>
         <nav className="footer-nav" aria-label="Footer"><Link href="/app">Designs</Link><Link href="/docs">Docs</Link><Link href="/settings">Settings</Link></nav>
-        <p>Built by Aryan Kansagara. Independent project, not affiliated with Altera.</p>
-        <p className="muted small">Samples are either synthetic or published public reports, and each is labelled. Your reports are parsed in your browser and stored on this device unless you sign in to sync. Quartus is a trademark of Altera; Vivado of AMD.</p>
+        <p>Built by Aryan Kansagara.</p>
+        <p className="muted small">Samples are either synthetic or published public reports, and each is labelled. Your reports are parsed in your browser and stored on this device unless you sign in to sync.</p>
       </div>
     </footer>
   )

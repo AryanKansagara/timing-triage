@@ -43,4 +43,4 @@ npm test               # engine tests
 npm run build
 ```
 
-Built by Aryan Kansagara. Independent project, not affiliated with Altera.
+Built by Aryan Kansagara.
