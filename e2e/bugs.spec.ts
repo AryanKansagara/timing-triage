@@ -62,14 +62,14 @@ for (const [form, sdc] of [
   ['-include_generated_clocks', 'set_clock_groups -asynchronous -group [get_clocks -include_generated_clocks clkA] -group [get_clocks clkB]'],
   ['[list]', 'set_clock_groups -asynchronous -group [get_clocks [list clkA]] -group [get_clocks clkB]'],
   ['multi-line braces', 'set_clock_groups -asynchronous -group [get_clocks {\n  clkA\n}] -group [get_clocks {\n  clkB\n}]'],
-]) test.fail(`#7 clock groups written with ${form} are honoured`, async ({ page }) => {
+]) test(`#7 clock groups written with ${form} are honoured`, async ({ page }) => {
   await importFiles(page, ['x.rpt', crossing()])
   await setSdc(page, sdc)
   await tab(page, 'Clocks & CDC')
   await expect(page.locator('.crossing')).toContainText('Cut (SDC line 1)')
 })
 
-test.fail('#7 [all_inputs] constrains the input ports', async ({ page }) => {
+test('#7 [all_inputs] constrains the input ports', async ({ page }) => {
   await importFiles(page, ['x.rpt', HAND + '\n' + unconstrained('Input', ['sw[0]'])])
   await setSdc(page, 'set_input_delay -clock clk 2 [all_inputs]')
   await tab(page, 'Overview')

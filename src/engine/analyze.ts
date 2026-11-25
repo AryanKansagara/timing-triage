@@ -1,4 +1,4 @@
-import { clocksCut, ioConstrained, lintSdc, parseSdc, pathCut, type LintFinding, type SdcModel } from './sdc.ts'
+import { clocksCut, includeGenerated, ioConstrained, lintSdc, parseSdc, pathCut, type LintFinding, type SdcModel } from './sdc.ts'
 import type { Analysis, Cause, Clock, ParsedReport, Format, ReportMeta, Settings, TimingPath } from './types.ts'
 import { DEFAULT_SETTINGS } from './types.ts'
 
@@ -213,6 +213,8 @@ export function analyze({ report, sdcText, settings }: Inputs): Result {
   const alias = new Set(retimed.filter(x => x.sdcName !== x.clock).map(x => x.sdcName))
   const clocks = mergeClocks(report.clocks, sdc).filter(c => !alias.has(c.name)).map(c => shift.has(c.name) ? { ...c, period: shift.get(c.name)!.to } : c)
 
+  if (sdc) includeGenerated(sdc, clocks)
+
   const ports = new Set(report.unconstrained.filter(u => u.kind !== 'clock').map(u => u.name))
   for (const d of sdc?.io ?? []) for (const p of d.ports.patterns) ports.add(p)
   const ctx = { clocks, sdc, ports, s, defaults, format: report.format, regs: topRegisters(report.paths, { clocks, ports, format: report.format }) }
@@ -315,7 +317,7 @@ export function analyze({ report, sdcText, settings }: Inputs): Result {
   const totFor = (max: boolean, t: 'setup' | 'hold') => !retimed.length && !all.some(p => p.cutBy !== null && isMax(p.analysis) === max) ? report.totals?.[t] : undefined
   const tot = { setup: totFor(true, 'setup'), hold: totFor(false, 'hold') }
   const finite = (n: number, or: number | null) => Number.isFinite(n) ? round(n) : or
-  const names = report.unconstrained.filter((u): u is { kind: 'input' | 'output'; name: string } => u.kind !== 'clock' && !ioConstrained(sdc, u.name))
+  const names = report.unconstrained.filter((u): u is { kind: 'input' | 'output'; name: string } => u.kind !== 'clock' && !ioConstrained(sdc, u.name, u.kind))
   const counts = report.counts
   return {
     paths: all, clocks: clockStats, pairs, buses, causes, crossings,
