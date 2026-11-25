@@ -150,6 +150,12 @@ export function fmax(period: number, worstSlack: number) {
   return t > 0 ? 1000 / t : null
 }
 
+/**
+ * How many periods a same-clock setup path has: 0.5 for opposite edges, 2 for a two-cycle multicycle.
+ * Its requirement, and so its slack, moves by this much per ns of period. One when the report does not say.
+ */
+export const cycles = (p: Pick<TimingPath, 'relationship'>, period: number) => p.relationship !== undefined && p.relationship > 0 && period > 0 ? p.relationship / period : 1
+
 export interface Inputs { report: ParsedReport; sdcText?: string; settings?: Partial<Settings> }
 
 export function analyze({ report, sdcText, settings }: Inputs): Result {
@@ -174,7 +180,9 @@ export function analyze({ report, sdcText, settings }: Inputs): Result {
   const ctx = { clocks, sdc, ports, s, defaults }
   const all = report.paths.filter(p => s.includeHold || isMax(p.analysis)).map(p => {
     const x = p.launch === p.latch && isMax(p.analysis) ? shift.get(p.latch) : undefined
-    return classify(x ? { ...p, slack: round(p.slack + x.to - x.from), relationship: p.relationship === x.from ? x.to : p.relationship } : p, ctx)
+    if (!x) return classify(p, ctx)
+    const k = cycles(p, x.from)
+    return classify({ ...p, slack: round(p.slack + k * (x.to - x.from)), relationship: p.relationship !== undefined && p.relationship > 0 ? round(k * x.to) : p.relationship }, ctx)
   })
   const live = all.filter(p => p.cutBy === null)
   const failing = live.filter(p => p.slack < 0)
@@ -197,7 +205,9 @@ export function analyze({ report, sdcText, settings }: Inputs): Result {
     const same = setup.filter(p => p.launch === c)
     const per = period(c)
     const reported = report.fmax?.find(x => x.clock === c)
-    const est = per && same.length ? fmax(per, Math.min(...same.map(p => p.slack))) : null
+    // Each path needs its requirement minus its slack; divided by its cycles, that is the period it allows.
+    const need = per && same.length ? Math.max(...same.map(p => per - p.slack / cycles(p, per))) : 0
+    const est = need > 0 ? 1000 / need : null
     const holdWns = Math.min(hold.length ? Math.min(...hold.map(p => p.slack)) : Infinity, sumH?.slack ?? Infinity)
     return {
       clock: c, period: per, wns: round(wns), tns: round(Math.min(sumNeg(setup), sumS?.tns ?? 0)),
@@ -280,15 +290,15 @@ export function analyze({ report, sdcText, settings }: Inputs): Result {
 }
 
 /**
- * What-if: retime one clock to a new frequency. Same-clock setup paths shift by the period change;
+ * What-if: retime one clock to a new frequency. Same-clock setup paths shift by the period change times their number of cycles;
  * cross-clock paths are left alone because their relationship depends on both edges.
  */
 export function whatIfFrequency(r: Result, clock: string, mhz: number) {
   const st = r.clocks.find(c => c.clock === clock)
   if (!st?.period || !(mhz > 0)) return null
-  const delta = 1000 / mhz - st.period
+  const base = st.period, delta = 1000 / mhz - base
   const same = r.paths.filter(p => p.cutBy === null && p.latch === clock && p.launch === clock && (p.analysis === 'setup' || p.analysis === 'recovery'))
-  const shifted = same.map(p => ({ ...p, slack: round(p.slack + delta) }))
+  const shifted = same.map(p => ({ ...p, slack: round(p.slack + cycles(p, base) * delta) }))
   return {
     period: round(1000 / mhz), delta: round(delta), paths: same.length,
     failing: shifted.filter(p => p.slack < 0).length,
