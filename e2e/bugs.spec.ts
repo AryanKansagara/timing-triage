@@ -90,7 +90,7 @@ test('#8 a report cut off in its last row says rows are missing', async ({ page 
   await expect(page.locator('.issues')).toContainText(/cut off/)
 })
 
-test.fail('#9 recovery and removal summaries count', async ({ page }) => {
+test('#9 recovery and removal summaries count', async ({ page }) => {
   await importFiles(page, ['x.rpt', clocks([['clk', '10.000']]) + '\n' + summary('Setup', [['clk', '1.000', '0.000']]) + '\n' + summary('Recovery', [['clk', '-3.200', '-40.000']])])
   await expect(kpi(page, 'Setup WNS').locator('b')).toHaveText('−3.200 ns')
 })
