@@ -35,11 +35,11 @@ test('complete reports and borderless pastes are not called cut off', () => {
   for (const s of samples()) assert.ok(!parseReport(s.report).issues.some(i => /cut off/.test(i.message)), s.id)
 })
 
-test('a Vivado block that ends before Path Type is skipped with a warning, a minus sign is normalised', () => {
+test('a Vivado block that ends before Path Type stays visible with a warning, a minus sign is normalised', () => {
   const block = (minus: string, tail: string) => `| Tool Version : Vivado v.2024.2\nSlack (VIOLATED) :        ${minus}1.500ns\n  Source:  u_a/x/C\n  Destination:  u_b/y/D\n${tail}`
   const ok = parseReport(block('−', '  Path Type:  Hold (Min at Fast Process Corner)\n'))
   assert.deepEqual(ok.paths.map(p => [p.slack, p.analysis]), [[-1.5, 'hold']])
   const cut = parseReport(block('-', ''))
-  assert.equal(cut.paths.length, 0)
+  assert.deepEqual(cut.paths.map(p => p.slack), [-1.5])
   assert.ok(cut.issues.some(i => i.line === 2 && /cut off before Path Type/.test(i.message)))
 })

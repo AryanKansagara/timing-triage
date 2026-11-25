@@ -352,8 +352,8 @@ function parseVivado(text: string): ParsedReport {
   let typed = false
   const flush = () => {
     // Without a Path Type line there is no telling setup from hold.
-    if (p && !typed) r.issues.push({ line: p.line, level: 'warn', message: 'This path block is cut off before Path Type, so it was skipped. The file may be incomplete; export it again.' })
-    else if (p) {
+    if (p && !typed) r.issues.push({ line: p.line, level: 'warn', message: 'This path block is cut off before Path Type, so it is counted as setup. The file may be incomplete; export it again.' })
+    if (p) {
       const data = secs.filter(x => x.seen && (!x.clock || x.input))
       const fo = Math.max(0, ...data.map(x => x.fo))
       if (data.length && (fo > 0 || secs.some(x => x.fo > 0))) p.fanout = fo
