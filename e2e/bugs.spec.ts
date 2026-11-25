@@ -26,7 +26,7 @@ for (const [why, sdc] of [
   ['-hold only', 'set_false_path -hold -from [get_clocks clkA] -to [get_clocks clkB]'],
   ['-through', 'set_false_path -from [get_clocks clkA] -through [get_pins zz]'],
   ['-rise_from another clock', 'set_false_path -rise_from [get_clocks other] -to [get_clocks clkB]'],
-]) test.fail(`#4 a false path limited by ${why} does not hide a setup violation`, async ({ page }) => {
+]) test(`#4 a false path limited by ${why} does not hide a setup violation`, async ({ page }) => {
   await importFiles(page, ['x.rpt', crossing()])
   await setSdc(page, sdc)
   await tab(page, 'Overview')
