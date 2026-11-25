@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { CAUSE_ORDER, CauseDot, SlackHistogram, Trend } from './charts.tsx'
 import { CAUSES, rootClock, verdict, whatIfFrequency, type Classified } from './engine/analyze.ts'
 import { applyToSdc, causeLabel, fixesSdc, pathsCsv, type Fix } from './engine/fixes.ts'
-import { compare } from './engine/snapshot.ts'
+import { compare, isCut } from './engine/snapshot.ts'
 import type { Cause } from './engine/types.ts'
 import { saveRun, type Tab, type TabProps } from './Project.tsx'
 import { runAnalysis } from './projectData.ts'
@@ -483,7 +483,8 @@ function History({ project, run, update }: TabProps) {
               <div><h3>Per clock WNS</h3><table><tbody>{d.clocks.map(c => <tr key={c.clock}><th className="mono clip small" title={c.clock}>{c.clock}</th><td className="num mono">{fmtNs(c.before)}</td><td className="num mono">{fmtNs(c.after)}</td><td className={`num mono ${c.before !== null && c.after !== null ? c.after > c.before ? 'good-text' : c.after < c.before ? 'bad-text' : '' : ''}`}>{c.before !== null && c.after !== null ? signed(Math.round((c.after - c.before) * 1000) / 1000, v => v.toFixed(3)) : 'new'}</td></tr>)}</tbody></table></div>
               <div>
                 <h3>Endpoints</h3>
-                <p className="small"><span className="good-text">{d.fixed.length} fixed</span> · <span className="bad-text">{d.added.length} new</span> · {d.still} still failing</p>
+                <p className="small">{d.knowsFixed ? <span className="good-text">{d.knowsAdded ? '' : 'at least '}{d.fixed.length} fixed</span> : 'fixed unknown'} · {d.knowsAdded ? <span className="bad-text">{d.knowsFixed ? '' : 'at least '}{d.added.length} new</span> : 'new unknown'} · {d.knowsFixed && d.knowsAdded ? '' : 'at least '}{d.still} still failing</p>
+                {(!d.knowsFixed || !d.knowsAdded) && <p className="small muted">{[...new Set([A, B].filter(isCut).map(s => s.label))].map(l => `“${l}”`).join(' and ')} had more failing endpoints than the 400 a saved run keeps, so endpoints outside that list cannot be compared.</p>}
                 {d.fixed.length > 0 && <details><summary className="small">Fixed endpoints</summary><ul className="mono tiny ep">{d.fixed.slice(0, 50).map(e => <li key={e}>{e}</li>)}</ul></details>}
                 {d.added.length > 0 && <details open><summary className="small">New failing endpoints</summary><ul className="mono tiny ep">{d.added.slice(0, 50).map(e => <li key={e}>{e}</li>)}</ul></details>}
               </div>
