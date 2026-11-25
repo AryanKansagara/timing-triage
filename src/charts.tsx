@@ -96,21 +96,22 @@ export function Trend({ snaps }: { snaps: Snapshot[] }) {
   if (s.length < 2) return <p className="muted small">Save at least two runs to see a trend.</p>
   const narrow = typeof matchMedia === 'function' && matchMedia('(max-width: 720px)').matches
   const W = narrow ? 480 : 1100, H = 260, pl = 44, pr = 44, pt = 14, pb = 34
-  const wmin = Math.min(0, ...s.map(x => x.wns)), wmax = Math.max(0.2, ...s.map(x => x.wns))
+  const known = s.flatMap((x, i) => x.wns === null ? [] : [{ ...x, wns: x.wns, i }])
+  const wmin = Math.min(0, ...known.map(x => x.wns)), wmax = Math.max(0.2, ...known.map(x => x.wns))
   const fmax = Math.max(1, ...s.map(x => x.failing))
   const x = (i: number) => pl + (W - pl - pr) * (s.length === 1 ? 0.5 : i / (s.length - 1))
   const yw = (v: number) => pt + (H - pt - pb) * (wmax - v) / (wmax - wmin || 1)
   const yf = (v: number) => H - pb - (H - pt - pb) * v / fmax
   const bw = Math.min(36, (W - pl - pr) / s.length / 2)
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} className="trend" role="img" aria-label={`Worst negative slack went from ${s[0].wns} to ${s.at(-1)!.wns} ns over ${s.length} runs`}>
+    <svg viewBox={`0 0 ${W} ${H}`} className="trend" role="img" aria-label={`Worst negative slack went from ${s[0].wns ?? 'unknown'} to ${s.at(-1)!.wns ?? 'unknown'} ns over ${s.length} runs`}>
       {s.map((p, i) => <rect key={p.id} x={x(i) - bw / 2} y={yf(p.failing)} width={bw} height={H - pb - yf(p.failing)} className="t-bar" rx={3}><title>{p.failing} failing paths</title></rect>)}
       <line x1={pl} x2={W - pr} y1={yw(0)} y2={yw(0)} className="zero" />
       <text x={pl - 6} y={yw(0) + 4} textAnchor="end" className="axis">0</text>
       <text x={pl - 6} y={yw(wmin) + 4} textAnchor="end" className="axis">{wmin.toFixed(1)}</text>
       <text x={W - pr + 6} y={yf(fmax) + 4} className="axis">{fmax}</text>
-      <polyline points={s.map((p, i) => `${x(i)},${yw(p.wns)}`).join(' ')} className="t-line" />
-      {s.map((p, i) => <g key={p.id}><circle cx={x(i)} cy={yw(p.wns)} r={4.5} className="t-dot"><title>{p.label}: WNS {p.wns} ns</title></circle><text x={x(i)} y={H - 12} textAnchor="middle" className="axis">{new Date(p.at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</text></g>)}
+      <polyline points={known.map(p => `${x(p.i)},${yw(p.wns)}`).join(' ')} className="t-line" />
+      {s.map((p, i) => <g key={p.id}>{p.wns !== null && <circle cx={x(i)} cy={yw(p.wns)} r={4.5} className="t-dot"><title>{p.label}: WNS {p.wns} ns</title></circle>}<text x={x(i)} y={H - 12} textAnchor="middle" className="axis">{new Date(p.at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</text></g>)}
     </svg>
   )
 }
