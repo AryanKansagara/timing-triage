@@ -18,6 +18,8 @@ export interface Classified extends TimingPath {
   /** SDC line that cuts this path (clock groups or false path), if any */
   cutBy: number | null
   cross: boolean
+  /** For I/O causes: the end that is the device port */
+  port?: 'from' | 'to'
 }
 
 export interface ClockStat {
@@ -93,9 +95,27 @@ export function isSyncName(name: string) {
 /** One bit into a synchronizer stage. Several bits can tear, and a bit above 0 is part of a wider register. */
 const isSynchronized = (name: string, bits: Set<string>) => bits.size === 1 && bits.has('0') && isSyncName(name)
 
-export function isPort(name: string, known: Set<string>) {
-  if (known.has(name) || known.has(bus(name))) return true
-  return !/[|/:]/.test(name) && !/~/.test(name)
+const bare = (name: string) => !/[|/:~]/.test(name)
+
+interface PortCtx { clocks: Clock[]; ports: Set<string>; format?: Format; regs?: Set<string> }
+/**
+ * Which ends of a path are device ports. Quartus prints top-level registers without hierarchy, so a bare name is only
+ * a port with evidence: it is listed as one, its clock is virtual, or the other end is inside the design.
+ * Vivado always prints a register's pin (`cnt_reg[0]/C`), so there a bare name is a port.
+ */
+export function portEnds(p: TimingPath, ctx: PortCtx): { from: boolean; to: boolean } {
+  const known = (n: string) => ctx.ports.has(n) || ctx.ports.has(bus(n))
+  const virtual = (c: string) => ctx.clocks.find(x => x.name === c)?.kind === 'virtual'
+  const pair = ctx.format !== 'vivado' && bare(p.from) && bare(p.to)
+  const end = (n: string, clock: string) => known(n) || (bare(n) && (!pair || virtual(clock)) && !ctx.regs?.has(bus(n)))
+  return { from: end(p.from, p.launch), to: end(p.to, p.latch) }
+}
+
+/** Bare Quartus names that other paths show to be registers: they launch and latch between top-level names. */
+function topRegisters(paths: TimingPath[], ctx: PortCtx) {
+  const pairs = ctx.format === 'vivado' ? [] : paths.filter(p => bare(p.from) && bare(p.to) && p.launch && p.latch && !portEnds(p, ctx).from && !portEnds(p, ctx).to)
+  const from = new Set(pairs.map(p => bus(p.from)))
+  return new Set(pairs.map(p => bus(p.to)).filter(n => from.has(n)))
 }
 
 /** The ultimate source clock: generated clocks resolve to their master, PLL outputs share a PLL instance. */
@@ -127,16 +147,17 @@ export function isHalfCycle(p: TimingPath, clocks: Clock[]) {
   return !!a && a === b && Math.abs(p.relationship - a / 2) <= a * 0.02
 }
 
-export function classify(p: TimingPath, ctx: { clocks: Clock[]; sdc: SdcModel | null; ports: Set<string>; s: Settings; defaults?: Set<string> }): Classified {
+export function classify(p: TimingPath, ctx: { clocks: Clock[]; sdc: SdcModel | null; ports: Set<string>; s: Settings; defaults?: Set<string>; format?: Format; regs?: Set<string> }): Classified {
   const cross = !!p.launch && !!p.latch && p.launch !== p.latch
   const cutBy = cross ? clocksCut(ctx.sdc, p.launch, p.latch, p.analysis) ?? pathCut(ctx.sdc, p.from, p.to, p.analysis) : pathCut(ctx.sdc, p.from, p.to, p.analysis)
   const base: Classified = { ...p, cause: null, cutBy, cross }
   if (p.slack >= 0 || cutBy !== null) return base
   const s = ctx.s
   let cause: Cause
+  const ends = portEnds(p, ctx)
   const unrelated = cross && rootClock(p.launch, ctx.clocks) !== rootClock(p.latch, ctx.clocks)
   if (ctx.defaults?.has(p.latch) || ctx.defaults?.has(p.launch)) cause = 'noclock'
-  else if (isPort(p.from, ctx.ports) || isPort(p.to, ctx.ports) || !p.launch || !p.latch) cause = 'io'
+  else if (ends.from || ends.to || !p.launch || !p.latch) cause = 'io'
   else if (unrelated) cause = 'cdc'
   // Hold and removal fail when the latch clock arrives later than the data: more logic cannot cause it.
   else if (p.analysis === 'hold' || p.analysis === 'removal') cause = 'skew'
@@ -151,7 +172,7 @@ export function classify(p: TimingPath, ctx: { clocks: Clock[]; sdc: SdcModel | 
   // Few levels but mostly cell delay: a RAM, DSP or carry chain without an output register.
   else if (p.logicDelay !== undefined && p.dataDelay && p.logicDelay / p.dataDelay >= 0.6) cause = 'logic'
   else cause = 'route'
-  return { ...base, cause }
+  return cause === 'io' && (ends.from || ends.to) ? { ...base, cause, port: ends.from ? 'from' : 'to' } : { ...base, cause }
 }
 
 const sumNeg = (paths: TimingPath[]) => {
@@ -194,7 +215,7 @@ export function analyze({ report, sdcText, settings }: Inputs): Result {
 
   const ports = new Set(report.unconstrained.filter(u => u.kind !== 'clock').map(u => u.name))
   for (const d of sdc?.io ?? []) for (const p of d.ports.patterns) ports.add(p)
-  const ctx = { clocks, sdc, ports, s, defaults }
+  const ctx = { clocks, sdc, ports, s, defaults, format: report.format, regs: topRegisters(report.paths, { clocks, ports, format: report.format }) }
   const all = report.paths.filter(p => s.includeHold || isMax(p.analysis)).map(p => {
     const x = p.launch === p.latch && isMax(p.analysis) ? shift.get(p.latch) : undefined
     if (!x) return classify(p, ctx)

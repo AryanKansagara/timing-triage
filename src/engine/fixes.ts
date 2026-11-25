@@ -211,13 +211,13 @@ export function buildFixes(r: Result, clocks: Clock[], settings: Partial<Setting
     const lines = ['# Board-level clock that launches/captures the external device; adjust to the real interface.', `create_clock -name virt_${clk.replace(/[^\w]/g, '_')} -period ${f3(per)}`]
     for (const p of inPorts) lines.push(`set_input_delay -clock virt_${clk.replace(/[^\w]/g, '_')} -max ${f3(per * 0.4)} [get_ports {${p}}]`, `set_input_delay -clock virt_${clk.replace(/[^\w]/g, '_')} -min 0.000 [get_ports {${p}}]`)
     for (const p of outPorts) lines.push(`set_output_delay -clock virt_${clk.replace(/[^\w]/g, '_')} -max ${f3(per * 0.3)} [get_ports {${p}}]`, `set_output_delay -clock virt_${clk.replace(/[^\w]/g, '_')} -min 0.000 [get_ports {${p}}]`)
-    const ports = [...new Set(ioPaths.map(p => bus(p.from.includes('|') || p.from.includes('/') ? p.to : p.from)))]
+    const ports = [...new Set(ioPaths.map(p => bus(p.port ? p[p.port] : p.from.includes('|') || p.from.includes('/') ? p.to : p.from)))]
     out.push({
       id: 'io', cause: 'io', severity: ioPaths.length ? 'error' : 'warn',
       title: inPorts.size || outPorts.size ? `Constrain ${inPorts.size + outPorts.size} unconstrained I/O port group${inPorts.size + outPorts.size > 1 ? 's' : ''}` : `Fix I/O timing on ${ports.slice(0, 2).join(', ')}`,
       why: `${inPorts.size + outPorts.size ? `Ports without set_input_delay or set_output_delay are not timed at all, so the Fitter can place their registers anywhere. ` : ''}${ioPaths.length ? `${ioPaths.length} I/O path${ioPaths.length > 1 ? 's fail' : ' fails'}: the external budget leaves too little time inside the FPGA.` : ''}`.trim(),
       sdc: inPorts.size || outPorts.size ? lines.join('\n') : undefined,
-      qsf: !ports.length ? undefined : viv ? ports.map(p => `set_property IOB TRUE [get_ports ${brace(p)}]`).join('\n') : ports.map(p => `set_instance_assignment -name ${ioPaths.some(x => bus(x.from) === p) ? 'FAST_INPUT_REGISTER' : 'FAST_OUTPUT_REGISTER'} ON -to ${brace(p)}`).join('\n'),
+      qsf: !ports.length ? undefined : viv ? ports.map(p => `set_property IOB TRUE [get_ports ${brace(p)}]`).join('\n') : ports.map(p => `set_instance_assignment -name ${ioPaths.some(x => x.port !== 'to' && bus(x.from) === p) ? 'FAST_INPUT_REGISTER' : 'FAST_OUTPUT_REGISTER'} ON -to ${brace(p)}`).join('\n'),
       steps: [
         'Take -max/-min from the external device datasheet and board trace delay; the values below are placeholders sized from the clock period.',
         'Asynchronous inputs (buttons, UART RX) need a synchronizer, then a set_false_path -from the port instead of an input delay.',
