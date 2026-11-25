@@ -68,12 +68,12 @@ test.fail('#7 [all_inputs] constrains the input ports', async ({ page }) => {
   await expect(page.getByText(/not constrained, so/)).toHaveCount(0)
 })
 
-test.fail('#8 a Unicode minus is still negative', async ({ page }) => {
+test('#8 a Unicode minus is still negative', async ({ page }) => {
   await importFiles(page, ['x.rpt', paths('Setup: clk', [{ slack: '−1.234', from: 'u|a', to: 'u|b' }])])
   await expect(kpi(page, 'Setup WNS').locator('b')).toHaveText('−1.234 ns')
 })
 
-test.fail('#8 a report cut off in its last row says rows are missing', async ({ page }) => {
+test('#8 a report cut off in its last row says rows are missing', async ({ page }) => {
   await newDesign(page)
   const t = paths('Setup: clk', [{ slack: '2.000', from: 'u|a', to: 'u|b' }, { slack: '-4.000', from: 'u|c', to: 'u|d' }])
   await choose(page, ['cut.rpt', t.slice(0, t.indexOf('-4.000') + 10)])

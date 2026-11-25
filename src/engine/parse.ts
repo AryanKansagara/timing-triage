@@ -4,9 +4,13 @@ import type { Analysis, Issue, Format, ParsedReport, TimingPath } from './types.
 
 const num = (s: string | undefined) => {
   if (s === undefined) return undefined
-  const m = s.replace(/,/g, '').match(/-?\d+(?:\.\d+)?(?:e-?\d+)?/i)
+  const m = s.replace(/,/g, '').match(/-?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?/i)
   return m ? Number(m[0]) : undefined
 }
+/** Slack decides pass or fail, so the whole cell has to be a number (with or without "ns"). */
+const slackNum = (s: string | undefined) => s !== undefined && /^[+-]?(?:\d[\d,]*(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?\s*(?:ns)?$/i.test(s.trim()) ? num(s) : undefined
+/** Word, PDFs and web pages turn the minus of a number into U+2212 or an en dash. */
+const asciiMinus = (t: string) => t.replace(/(^|[\s;:(])[\u2212\u2013](?=\.?\d)/gm, '$1-')
 
 export function detectFormat(text: string): Format {
   const head = text.slice(0, 200_000)
@@ -16,7 +20,8 @@ export function detectFormat(text: string): Format {
   return 'unknown'
 }
 
-export function parseReport(text: string): ParsedReport {
+export function parseReport(raw: string): ParsedReport {
+  const text = asciiMinus(raw)
   const format = detectFormat(text)
   if (format === 'quartus') return parseQuartus(text)
   if (format === 'vivado') return parseVivado(text)
@@ -65,6 +70,21 @@ export function quartusTables(text: string): Table[] {
   }
   if (cur) out.push(cur)
   return out
+}
+
+/** Rows that lost their closing ; and a last table that never closes: the rest of the table is missing. */
+function quartusCutOff(text: string, r: ParsedReport) {
+  const lines = text.split(/\r?\n/).map(stripInfo)
+  let open = false
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i], row = /^\s*;/.test(l)
+    if (row && !/;\s*$/.test(l)) r.issues.push({ line: i + 1, level: 'warn', message: `This table row is cut off, so it was not read and paths may be missing: "${l.trim().slice(0, 90)}"` })
+    if (row) open = true
+    else if (isBorder(l) || l.trim()) open = false
+    // Pasted text can lose its borders, but a blank line still ends a table; only the end of the file does not.
+    else if (i < lines.length - 1 && lines.slice(i).some(x => x.trim())) open = false
+  }
+  if (open && /^\s*\+-{3,}/m.test(text)) r.issues.push({ line: lines.length, level: 'warn', message: 'The file is cut off inside a table (no closing border), so rows may be missing. Export it again.' })
 }
 
 const analysisOf = (s: string): Analysis | null => {
@@ -153,7 +173,7 @@ function parseQuartus(text: string): ParsedReport {
       const ix = { s: col(h, 'Slack'), f: col(h, 'From Node'), t: col(h, 'To Node'), lc: col(h, 'Launch Clock'), ll: col(h, 'Latch Clock'), rel: col(h, 'Relationship'), sk: col(h, 'Clock Skew'), dd: col(h, 'Data Delay') }
       for (const row of t.rows) {
         const c = row.cells
-        const slack = num(c[ix.s])
+        const slack = slackNum(c[ix.s])
         if (slack === undefined || !c[ix.f] || !c[ix.t]) { r.issues.push({ line: row.line, level: 'warn', message: `Skipped a path row without a numeric slack or node names: "${c.join(' ; ').slice(0, 90)}"` }); continue }
         add({ id: '', analysis: an, slack, from: c[ix.f], to: c[ix.t], launch: c[ix.lc] ?? '', latch: c[ix.ll] ?? '', relationship: num(c[ix.rel]), skew: num(c[ix.sk]), dataDelay: num(c[ix.dd]), corner, line: row.line })
       }
@@ -164,7 +184,7 @@ function parseQuartus(text: string): ParsedReport {
       note('Path detail sections')
       const kv = Object.fromEntries(t.rows.map(x => [x.cells[0].toLowerCase(), x.cells[1] ?? '']))
       const an = analysisOf(t.context) ?? 'setup'
-      const slack = num(kv['slack']) ?? num(t.context.match(/slack is (-?[\d.]+)/i)?.[1])
+      const slack = slackNum(kv['slack']) ?? num(t.context.match(/slack is (-?[\d.]+)/i)?.[1])
       if (slack === undefined || !kv['from node'] || !kv['to node']) { r.issues.push({ line: t.line, level: 'warn', message: 'Path Summary without slack or node names; skipped.' }); detail = null; continue }
       detail = add({ id: '', analysis: an, slack, from: kv['from node'], to: kv['to node'], launch: kv['launch clock'] ?? '', latch: kv['latch clock'] ?? '', arrival: num(kv['data arrival time']), required: num(kv['data required time']), line: t.line })
       continue
@@ -216,8 +236,8 @@ function parseQuartus(text: string): ParsedReport {
       const an = analysisOf(t.title)!
       const ti = hl.findIndex(x => x.includes('tns'))
       for (const row of t.rows) {
-        const slack = num(row.cells[1]), tns = num(row.cells[ti]) ?? 0
-        if (slack === undefined) continue
+        const slack = slackNum(row.cells[1]), tns = num(row.cells[ti]) ?? 0
+        if (slack === undefined) { r.issues.push({ line: row.line, level: 'warn', message: `Skipped a summary row without a numeric slack: "${row.cells.join(' ; ').slice(0, 90)}"` }); continue }
         const prev = r.summary.find(s => s.clock === row.cells[0] && s.analysis === an)
         const corner = cornerOf(t.title)
         if (prev) { if (slack < prev.slack) { prev.slack = slack; prev.corner = corner } prev.tns = Math.min(prev.tns, tns) }
@@ -298,6 +318,7 @@ function parseQuartus(text: string): ParsedReport {
     }
   }
 
+  quartusCutOff(text, r)
   const empty = quartusMessages(text, r, unc)
   r.paths = [...byKey.values()].map((p, i) => ({ ...p, id: `p${i + 1}` }))
   for (const p of r.pulse ?? []) if (p.slack < 0 && !r.defaultClocks?.includes(p.clock)) r.issues.push({ line: 1, level: 'warn', message: `Minimum pulse width fails on ${p.clock} (slack ${p.slack.toFixed(3)} ns): the clock is faster than the device's clock network, RAM or DSP blocks allow.` })
@@ -328,8 +349,11 @@ function parseVivado(text: string): ParsedReport {
   // The path table is split by dashed lines into launch clock, data and capture clock sections.
   // Fanout only counts in data sections: clock nets have thousands of loads and say nothing about the path.
   let secs: { clock: boolean; input: boolean; fo: number; seen: boolean }[] = []
+  let typed = false
   const flush = () => {
-    if (p) {
+    // Without a Path Type line there is no telling setup from hold.
+    if (p && !typed) r.issues.push({ line: p.line, level: 'warn', message: 'This path block is cut off before Path Type, so it was skipped. The file may be incomplete; export it again.' })
+    else if (p) {
       const data = secs.filter(x => x.seen && (!x.clock || x.input))
       const fo = Math.max(0, ...data.map(x => x.fo))
       if (data.length && (fo > 0 || secs.some(x => x.fo > 0))) p.fanout = fo
@@ -384,7 +408,7 @@ function parseVivado(text: string): ParsedReport {
       flush()
       if (sm[2] === 'inf') continue
       p = { id: '', analysis: 'setup', slack: Number(sm[2]), from: '', to: '', launch: '', latch: '', line: i + 1 }
-      inTable = false
+      inTable = false; typed = false
       if (!r.found.includes('Path details')) r.found.push('Path details')
       continue
     }
@@ -394,7 +418,7 @@ function parseVivado(text: string): ParsedReport {
     let v: string | undefined
     if ((v = field('Source'))) { cur.from = v.trim(); const c = lines[i + 1]?.match(/clocked by (\S+)\s*\{[^}]*period=([\d.]+)ns/); if (c) { cur.launch = c[1]; addClock(c[1], Number(c[2])) } }
     else if ((v = field('Destination'))) { cur.to = v.trim(); const c = lines[i + 1]?.match(/clocked by (\S+)\s*\{[^}]*period=([\d.]+)ns/); if (c) { cur.latch = c[1]; addClock(c[1], Number(c[2])) } }
-    else if ((v = field('Path Type'))) cur.analysis = analysisOf(v) ?? 'setup'
+    else if ((v = field('Path Type'))) { const an = analysisOf(v); if (an) { cur.analysis = an; typed = true } }
     else if ((v = field('Requirement'))) cur.relationship = num(v)
     else if ((v = field('Data Path Delay'))) { cur.dataDelay = num(v); cur.logicDelay = num(v.match(/logic\s+(-?[\d.]+)ns/)?.[1]); cur.routeDelay = num(v.match(/route\s+(-?[\d.]+)ns/)?.[1]) }
     else if ((v = field('Logic Levels'))) { cur.levels = num(v); cur.levelDetail = v.match(/\(([^)]+)\)/)?.[1] }
