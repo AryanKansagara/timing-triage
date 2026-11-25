@@ -91,7 +91,7 @@ export default function Docs() {
       <p>Rules as of November 2026. Each failing, un-cut path gets the first cause that matches:</p>
       <ol>
         <li><b>No clock constraint</b>: the latch or launch clock is one Quartus created itself with <code>derive_clocks -period 1.0</code> because no SDC constrained it. The report says so in its messages section. Slack against a 1 ns clock is meaningless, so nothing else is diagnosed until the clock has a real period.</li>
-        <li><b>I/O</b>: an endpoint is a top-level port (listed as unconstrained, named in a <code>set_*_delay</code>, or a name with no hierarchy), or the path has no launch/latch clock.</li>
+        <li><b>I/O</b>: an endpoint is a top-level port (listed as unconstrained, named in a <code>set_*_delay</code>, or a name with no hierarchy when the other end is inside the design or its clock is virtual; Quartus also prints top-level registers without hierarchy, so two such names are a register path), or the path has no launch/latch clock.</li>
         <li><b>Unconstrained CDC</b>: launch and latch clocks trace back to different sources. Generated clocks follow their master (Quartus <i>Master</i> column, Vivado clock summary indentation); PLL outputs from one PLL instance are one family. Crossings covered by <code>set_clock_groups</code> or a clock-to-clock <code>set_false_path</code> are cut and shown as ghosts.</li>
         <li><b>Hold and removal failures</b> are always <b>Clock skew</b>: they fail when the latch clock arrives later than the data, which logic depth cannot cause.</li>
         <li><b>Half-cycle path</b>: launch and latch clock are the same and the setup relationship is half the period, so the two registers use opposite edges.</li>

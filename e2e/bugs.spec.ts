@@ -113,7 +113,7 @@ test('#12 hsync is not a synchronizer', async ({ page }) => {
   await expect(page.locator('.sync-list')).toContainText('needs a two-flop synchronizer')
 })
 
-test.fail('#13 a top-level counter is not I/O', async ({ page }) => {
+test('#13 a top-level counter is not I/O', async ({ page }) => {
   await importFiles(page, ['x.rpt', clocks([['clk', '10.000']]) + '\n' + paths('Setup: clk', [{ slack: '-1.000', from: 'cnt[0]', to: 'cnt[25]', delay: '11.000' }])])
   await expect(page.getByRole('button', { name: /Logic depth/ })).toBeVisible()
 })
