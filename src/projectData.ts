@@ -47,6 +47,14 @@ export function combine(list: ParsedReport[]): ParsedReport {
   return out
 }
 
+/** Several constraint files (Vivado projects usually split them) become one text in order, each under its file name. */
+export function combineSdc(files: { name: string; text: string }[]): { name: string; text: string } | null {
+  if (files.length < 2) return files.length ? { name: files[0].name, text: files[0].text } : null
+  const ext = files[0].name.match(/\.(sdc|xdc)$/i)?.[0].toLowerCase() ?? '.sdc'
+  // The blank line ends a backslash continuation left open at the end of a file; one in a name would start one.
+  return { name: `constraints${ext}`, text: files.map(f => `# File: ${f.name.replace(/[\\\r\n]+/g, ' ')}\n${f.text.replace(/\s*$/, '')}\n`).join('\n') }
+}
+
 const sampleData = (id: string): Dataset | null => {
   const s = samples().find(x => x.id === id)
   return s ? [{ name: s.reportName, text: s.report }] : null

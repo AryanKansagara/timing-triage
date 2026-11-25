@@ -101,10 +101,24 @@ test.fail('#10 a node name cannot become a spreadsheet formula', async ({ page }
   expect((await exported(page, 'Export CSV')).text).not.toMatch(/(^|,)"?=/m)
 })
 
-test.fail('#11 two constraint files are both used', async ({ page }) => {
+test('#11 two constraint files are both used', async ({ page }) => {
   await importFiles(page, ['x.rpt', crossing()], ['a.sdc', 'create_clock -name clkA -period 10 [get_ports a]\n'], ['b.sdc', 'create_clock -name clkB -period 8 [get_ports b]\n'])
   await tab(page, 'Constraints')
-  await expect(page.getByLabel('SDC constraints')).toHaveValue(/clkA[\s\S]*clkB/)
+  await expect(page.getByLabel('SDC constraints')).toHaveValue(/# File: a\.sdc\n.*clkA[\s\S]*# File: b\.sdc\n.*clkB/)
+})
+
+test('#11 constraint files alone: both are announced, in order, and one can be removed', async ({ page }) => {
+  await importFiles(page, ['x.rpt', crossing()])
+  await tab(page, 'Data')
+  await choose(page, ['a.xdc', 'create_clock -name clkA -period 10 [get_ports a]\n'], ['b.xdc', 'create_clock -name clkB -period 8 [get_ports b]\n'], ['c.xdc', 'set_false_path -from [get_clocks clkA]\n'])
+  await expect(page.locator('.validation').nth(1)).toContainText('File 2 of 3 that together')
+  await page.locator('.validation').nth(2).getByRole('button', { name: 'Remove' }).click()
+  await analyzeButton(page).click()
+  await expect(page).toHaveURL(/\/app\/p\/[0-9a-f-]+$/)
+  await tab(page, 'Constraints')
+  const box = page.getByLabel('SDC constraints')
+  await expect(box).toHaveValue(/a\.xdc\n.*clkA[\s\S]*b\.xdc\n.*clkB/)
+  await expect(box).not.toHaveValue(/false_path/)
 })
 
 test('#12 hsync is not a synchronizer', async ({ page }) => {
