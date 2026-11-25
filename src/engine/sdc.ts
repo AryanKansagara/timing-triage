@@ -3,7 +3,10 @@ import type { Analysis, Clock, Issue } from './types.ts'
 
 export interface Stmt { cmd: string; words: string[]; line: number; text: string }
 
-/** Splits SDC text into commands, joining backslash continuations and dropping comments. */
+/** A line that starts a command of its own, so an open { before it is a Tcl block or a typo, not a list. */
+const STARTS_COMMAND = /^\s*(?:(?:create|set|derive|remove|read|group)_\w+|set|if|foreach|while|proc)(?=\s|$)/
+
+/** Splits SDC text into commands, joining backslash continuations and lists in open braces, and dropping comments. */
 export function statements(text: string): Stmt[] {
   const out: Stmt[] = []
   const lines = text.split(/\r?\n/)
@@ -11,6 +14,10 @@ export function statements(text: string): Stmt[] {
     const start = i
     let buf = lines[i]
     while (/\\\s*$/.test(buf) && i + 1 < lines.length) buf = buf.replace(/\\\s*$/, ' ') + lines[++i]
+    // Tcl goes on to the next line inside { } and [ ]. Without a closing one the line is read on its own, as it stands.
+    let joined = buf, j = i
+    while (openDepth(joined) > 0 && j + 1 < lines.length && j - i < 1000 && !STARTS_COMMAND.test(lines[j + 1])) joined = joined.replace(/\\\s*$/, '') + ' ' + lines[++j].trim()
+    if (j > i && openDepth(joined) === 0) { buf = joined; i = j }
     for (const part of splitSemis(buf)) {
       const t = part.trim()
       if (!t || t.startsWith('#')) continue
@@ -19,6 +26,20 @@ export function statements(text: string): Stmt[] {
     }
   }
   return out
+}
+
+/** How many { and [ are still open at the end of the text, not counting comments and escaped ones. */
+function openDepth(s: string) {
+  let depth = 0, start = true
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i]
+    if (ch === '\\') { i++; start = false; continue }
+    if (ch === '#' && depth === 0 && start) return 0
+    if (ch === '{' || ch === '[') depth++
+    else if (ch === '}' || ch === ']') depth = Math.max(0, depth - 1)
+    start = (depth === 0 && ch === ';') || (start && /\s/.test(ch))
+  }
+  return depth
 }
 
 function splitSemis(s: string): string[] {
@@ -71,7 +92,7 @@ export function tokenize(s: string): string[] {
   return out
 }
 
-const FLAGS = new Set(['-asynchronous', '-exclusive', '-logically_exclusive', '-physically_exclusive', '-setup', '-hold', '-start', '-end', '-add', '-max', '-min', '-rise', '-fall', '-invert', '-combinational', '-clock_fall', '-add_delay', '-source_latency_included', '-network_latency_included', '-reference_pin', '-datapath_only'])
+const FLAGS = new Set(['-asynchronous', '-exclusive', '-logically_exclusive', '-physically_exclusive', '-setup', '-hold', '-start', '-end', '-add', '-max', '-min', '-rise', '-fall', '-invert', '-combinational', '-clock_fall', '-add_delay', '-source_latency_included', '-network_latency_included', '-reference_pin', '-datapath_only', '-quiet', '-verbose', '-reset_path'])
 
 export interface Opts { flags: Set<string>; opts: Map<string, string[]>; pos: string[] }
 
@@ -89,22 +110,69 @@ export function options(words: string[]): Opts {
   return o
 }
 
-export interface Collection { kind: string; patterns: string[] }
+export interface Collection {
+  kind: string; patterns: string[]
+  /** -hierarchical: patterns name a cell at any level */
+  hier?: boolean
+  /** -include_generated_clocks: clocks generated from these are included too */
+  generated?: boolean
+}
 
-/** `[get_clocks {a b}]` -> { kind: 'get_clocks', patterns: ['a', 'b'] }; `{a b}` -> kind ''. */
+const NAMED = /^get_(clocks|ports|cells|pins|registers|keepers|nodes|nets)$/
+// Switches of get_* that take no value and do not change which names match, or only narrow it when ignored.
+const GET_FLAGS = ['-include_generated_clocks', '-hierarchical', '-quiet', '-verbose', '-nocase', '-nowarn', '-no_duplicates', '-compatibility_mode']
+const GET_VALUES = ['-filter', '-of_objects', '-regexp', '-exact', '-hsc', '-leaf', '-match_style', '-physical_constraints']
+
+/**
+ * `[get_clocks {a b}]` -> { kind: 'get_clocks', patterns: ['a', 'b'] }; `{a b}` -> kind ''.
+ * A collection that is not understood (-filter, -regexp, -of_objects, other commands) has no patterns: it matches nothing.
+ */
 export function collection(word: string | undefined): Collection {
   if (!word) return { kind: '', patterns: [] }
-  let w = word.trim()
-  let kind = ''
-  if (w.startsWith('[') && w.endsWith(']')) {
-    const inner = tokenize(w.slice(1, -1))
-    kind = inner[0] ?? ''
-    const args = options(inner.slice(1)).pos
-    return { kind, patterns: args.flatMap(a => listOf(a)) }
+  const w = word.trim()
+  if (!(w.startsWith('[') && w.endsWith(']'))) return { kind: '', patterns: listOf(w) }
+  const [kind = '', ...args] = tokenize(w.slice(1, -1))
+  if (kind === 'list') {
+    const parts = args.map(collection)
+    const kinds = new Set(parts.map(p => p.kind))
+    // Plain names and collections of another kind cannot share one kind.
+    if (kinds.size > 1) return { kind, patterns: [] }
+    return { ...parts[0], kind: parts[0]?.kind ?? '', patterns: parts.every(p => !p.hier === !parts[0].hier && !p.generated === !parts[0].generated) ? parts.flatMap(p => p.patterns) : [] }
   }
-  return { kind, patterns: listOf(w) }
+  const out: Collection = { kind, patterns: [] }
+  if (!NAMED.test(kind)) return out
+  const patterns: string[] = []
+  for (const a of args) {
+    if (/^-[a-z_]+$/.test(a)) {
+      // Tools accept any unambiguous start of a switch, e.g. -hier.
+      const full = [...GET_FLAGS, ...GET_VALUES].filter(f => f === a || f.startsWith(a))
+      const flag = full.length === 1 || full[0] === a ? full[0] : undefined
+      if (!flag || !GET_FLAGS.includes(flag)) return out
+      if (flag === '-hierarchical') out.hier = true
+      if (flag === '-include_generated_clocks') out.generated = true
+    } else if (a.startsWith('[')) {
+      const inner = collection(a)
+      if (inner.kind && inner.kind !== kind) return { kind, patterns: [] }
+      if (inner.hier) out.hier = true
+      if (inner.generated) out.generated = true
+      patterns.push(...inner.patterns)
+    } else patterns.push(...listOf(a))
+  }
+  return { ...out, patterns }
 }
 const listOf = (w: string) => (w.startsWith('{') && w.endsWith('}') ? w.slice(1, -1) : w).split(/\s+/).filter(Boolean)
+
+/** Adds the clocks generated from the named ones where the constraint says -include_generated_clocks. */
+export function includeGenerated(m: SdcModel, clocks: Clock[]) {
+  for (const c of [...m.groups.flatMap(g => g.groups), ...m.falsePaths.flatMap(f => [f.from, f.to])]) {
+    if (!c?.generated || c.kind !== 'get_clocks') continue
+    for (let grew = true; grew;) {
+      const more = clocks.filter(x => x.master && matches(c, x.master) && !matches(c, x.name))
+      c.patterns.push(...more.map(x => x.name))
+      grew = more.length > 0
+    }
+  }
+}
 
 const globCache = new Map<string, RegExp>()
 export function glob(pattern: string, name: string) {
@@ -116,6 +184,18 @@ export function glob(pattern: string, name: string) {
   return re.test(name)
 }
 export const matches = (c: Collection, name: string) => c.patterns.some(p => glob(p, name))
+
+/**
+ * A node of a path against a constraint's nodes. Vivado paths name pins (`u/a_reg/C`) and get_cells names the cell.
+ * As in Vivado, a * does not reach over / there, and with -hierarchical the pattern is the cell's own name.
+ */
+function nodeMatches(c: Collection, node: string) {
+  if (!c.hier && matches(c, node)) return true
+  if (c.kind !== 'get_cells') return c.hier ? matches(c, node) : false
+  const cell = node.replace(/\/[A-Z][A-Z0-9_]*(\[\d+\])?$/, '')
+  const name = c.hier ? cell.slice(cell.lastIndexOf('/') + 1) : cell
+  return cell !== node && c.patterns.some(p => p.split('/').length === name.split('/').length && p.split('/').every((x, i) => glob(x, name.split('/')[i])))
+}
 
 // ---------- Model ----------
 
@@ -159,7 +239,7 @@ export function parseSdc(text: string): SdcModel {
       case 'derive_clock_uncertainty': m.deriveUncertainty = s.line; break
       case 'set_clock_groups': {
         const kind = ['-asynchronous', '-exclusive', '-logically_exclusive', '-physically_exclusive'].find(f => o.flags.has(f)) ?? ''
-        m.groups.push({ line: s.line, kind, groups: (o.opts.get('-group') ?? []).map(g => { const c = collection(g); return { kind: c.kind || 'get_clocks', patterns: c.patterns } }) })
+        m.groups.push({ line: s.line, kind, groups: (o.opts.get('-group') ?? []).map(g => { const c = collection(g); return { ...c, kind: c.kind || 'get_clocks' } }) })
         break
       }
       case 'set_false_path':
@@ -222,15 +302,15 @@ export function pathCut(m: SdcModel | null, from: string, to: string, analysis: 
   if (!m) return null
   for (const f of m.falsePaths) {
     if (clockSide(f.from) || clockSide(f.to) || !applies(f, analysis)) continue
-    const okF = !f.from || matches(f.from, from)
-    const okT = !f.to || matches(f.to, to)
+    const okF = !f.from || nodeMatches(f.from, from)
+    const okT = !f.to || nodeMatches(f.to, to)
     if (okF && okT && (f.from || f.to)) return f.line
   }
   return null
 }
 
-export function ioConstrained(m: SdcModel | null, port: string): boolean {
-  return !!m?.io.some(d => matches(d.ports, port))
+export function ioConstrained(m: SdcModel | null, port: string, kind?: 'input' | 'output'): boolean {
+  return !!m?.io.some(d => matches(d.ports, port) || (!!kind && d.dir === kind && d.ports.kind === `all_${kind}s`))
 }
 
 // ---------- Linter ----------
