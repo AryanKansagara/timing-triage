@@ -267,6 +267,11 @@ export function parseSdc(text: string): SdcModel {
   }
   return m
 }
+/**
+ * Names come from reports, which people share, and end up in Tcl that a tool sources. Between braces only a brace,
+ * a backslash before the closing one, or a line break can end the word; everything else is literal.
+ */
+export const tclSafe = (name: string) => !/[{}\u0000-\u001f\u007f\u0085\u2028\u2029]|\\$/.test(name)
 const stripBraces = (s: string | undefined) => s?.replace(/^\{|\}$/g, '').trim()
 
 // ---------- Constraint queries ----------
@@ -328,7 +333,7 @@ export function lintSdc(m: SdcModel, reportClocks: Clock[] = [], tool: string = 
     if (c.period < 1) add('period', c.line, 'warn', `${c.name}: period ${c.period} ns is faster than 1 GHz. Did you mean ${c.period * 1000} ns?`)
     if (c.period > 1000) add('period', c.line, 'warn', `${c.name}: period ${c.period} ns is slower than 1 MHz. Check the units; -period is in ns.`)
     const n = Number(c.name.match(/(\d+(?:[._p]\d+)?)\s*(?:m(?:hz)?)?$/i)?.[1]?.replace(/[_p]/, '.'))
-    if (n >= 2 && Math.abs(c.period - n) < 1e-6 && Math.abs(1000 / n - c.period) > 0.5) add('period', c.line, 'warn', `${c.name}: -period ${c.period} looks like the frequency in MHz. A ${n} MHz clock has a period of ${(1000 / n).toFixed(3)} ns.`, `create_clock -name {${c.name}} -period ${(1000 / n).toFixed(3)} ${c.source ? `[get_ports {${c.source}}]` : ''}`.trim())
+    if (n >= 2 && Math.abs(c.period - n) < 1e-6 && Math.abs(1000 / n - c.period) > 0.5) add('period', c.line, 'warn', `${c.name}: -period ${c.period} looks like the frequency in MHz. A ${n} MHz clock has a period of ${(1000 / n).toFixed(3)} ns.`, !tclSafe(c.name) || !tclSafe(c.source ?? '') ? undefined : `create_clock -name {${c.name}} -period ${(1000 / n).toFixed(3)} ${c.source ? `[get_ports {${c.source}}]` : ''}`.trim())
     if (seen.has(c.name)) add('duplicate', c.line, 'warn', `${c.name} is created twice (first on line ${seen.get(c.name)}). The later definition replaces the first unless -add is used.`)
     seen.set(c.name, c.line)
   }

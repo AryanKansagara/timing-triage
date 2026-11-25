@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { CAUSE_ORDER, CauseDot, SlackHistogram, Trend } from './charts.tsx'
 import { CAUSES, rootClock, verdict, whatIfFrequency, type Classified } from './engine/analyze.ts'
-import { applyToSdc, causeLabel, fixesSdc, pathsCsv, type Fix } from './engine/fixes.ts'
+import { applyToSdc, causeLabel, fixesSdc, LEFT_OUT, pathsCsv, type Fix } from './engine/fixes.ts'
 import { compare, isCut } from './engine/snapshot.ts'
 import type { Cause } from './engine/types.ts'
 import { saveRun, type Tab, type TabProps } from './Project.tsx'
@@ -401,7 +401,7 @@ function Fixes({ project, run, update, ds }: TabProps) {
         <div className="fix-list">
           {fixes.map((f, i) => {
             const canApply = !!f.sdc && f.sdc.split('\n').some(l => l.trim() && !l.trim().startsWith('#'))
-            const done = !!f.sdc && project.sdc.includes(f.sdc)
+            const done = canApply && !!f.sdc && project.sdc.includes(f.sdc)
             return (
               <article key={f.id} className={`fix-card sev-${f.severity}`} data-cause={f.cause}>
                 <div className="fix-rank">{i + 1}</div>
@@ -410,7 +410,7 @@ function Fixes({ project, run, update, ds }: TabProps) {
                   <h3 className="break">{f.title}</h3>
                   <p>{f.why}</p>
                   {f.steps.length > 0 && <ul className="steps">{f.steps.map(s => <li key={s}>{s}</li>)}</ul>}
-                  {f.sdc && <Code label={canApply ? 'SDC' : 'SDC (commented: read the condition first)'} code={f.sdc} />}
+                  {f.sdc && <Code label={canApply ? 'SDC' : f.sdc === LEFT_OUT ? 'SDC' : 'SDC (commented: read the condition first)'} code={f.sdc} />}
                   {f.qsf && <Code label={r.format === 'vivado' ? 'Tcl / XDC property (Tcl console, or paste into the .xdc)' : 'QSF assignment (Assignments > Assignment Editor, or paste into the .qsf)'} code={f.qsf} />}
                 </div>
                 <div className="fix-impact">
