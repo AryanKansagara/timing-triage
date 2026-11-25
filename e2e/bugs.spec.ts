@@ -107,7 +107,7 @@ test.fail('#11 two constraint files are both used', async ({ page }) => {
   await expect(page.getByLabel('SDC constraints')).toHaveValue(/clkA[\s\S]*clkB/)
 })
 
-test.fail('#12 hsync is not a synchronizer', async ({ page }) => {
+test('#12 hsync is not a synchronizer', async ({ page }) => {
   await importFiles(page, ['x.rpt', crossing().replace('u_b|y', 'u_v|hsync')])
   await tab(page, 'Clocks & CDC')
   await expect(page.locator('.sync-list')).toContainText('needs a two-flop synchronizer')

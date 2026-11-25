@@ -75,7 +75,23 @@ export interface Result {
 /** `u_rx|data[3]` -> `u_rx|data[*]` so register buses group together. */
 export const bus = (n: string) => n.replace(/\/[A-Z]{1,3}$/, '').replace(/\[\d+\](?=[^[]*$)/, '[*]')
 const bit = (n: string) => n.match(/\[(\d+)\](?=[^[]*$)/)?.[1]
-const isSyncName = (n: string) => /sync|meta|cdc|_ff[12]\b|dff[12]|s(ync)?_?reg[12]|synchronizer/i.test(n)
+
+// Video and framing syncs are data, not synchronizers: h_sync, vga_sync, frame_sync, sync_gen.
+const NOT_SYNC_BEFORE = new Set(['h', 'v', 'c', 'a', 'hor', 'horiz', 'horizontal', 'vert', 'vertical', 'video', 'vga', 'hdmi', 'dvi', 'frame', 'line', 'field', 'composite'])
+const NOT_SYNC_AFTER = new Set(['h', 'v', 'gen', 'generator', 'word', 'byte', 'pulse', 'pattern', 'detect', 'separator'])
+/** Whole words of the name only: `rx_sync`, `busy_meta`, `data_ff1`, not `hsync`, `async` or `metadata`. */
+export function isSyncName(name: string) {
+  const w = (name.match(/[A-Z]+(?![a-z])|[A-Z]?[a-z]+|\d+/g) ?? []).map(x => x.toLowerCase())
+  return w.some((x, i) => {
+    const prev = w[i - 1], next = w[i + 1]
+    if (/^(re)?sync(h|er|ed|d|ff|reg|stages?|hroni[sz](er|ers|ed))?$/.test(x)) return !NOT_SYNC_BEFORE.has(prev) && !NOT_SYNC_AFTER.has(next)
+    if (x === 'meta') return next !== 'data'
+    if (x === 'cdc') return prev !== 'usb'
+    return /^metastab/.test(x)
+  }) || /_ff[12]\b|(?<![a-z])(dff|s_?reg)[12](?!\d)/i.test(name)
+}
+/** One bit into a synchronizer stage. Several bits can tear, and a bit above 0 is part of a wider register. */
+const isSynchronized = (name: string, bits: Set<string>) => bits.size === 1 && bits.has('0') && isSyncName(name)
 
 export function isPort(name: string, known: Set<string>) {
   if (known.has(name) || known.has(bus(name))) return true
@@ -267,7 +283,7 @@ export function analyze({ report, sdcText, settings }: Inputs): Result {
       launch, latch, cutBy, status: cutBy !== null || transfer?.falsePath ? 'cut' : related ? 'related' : 'unconstrained',
       paths: Math.max(ps.length, transfer?.paths ?? 0), failing: Math.max(ps.filter(p => p.slack < 0 && p.cutBy === null).length, told.failing),
       wns: Number.isFinite(wns) ? wns : 0,
-      toBuses: [...byBus.entries()].map(([b, bits]) => ({ bus: b, width: bits.size, synchronized: isSyncName(b) })),
+      toBuses: [...byBus.entries()].map(([b, bits]) => ({ bus: b, width: bits.size, synchronized: isSynchronized(b, bits) })),
     } satisfies Crossing
   }).sort((a, b) => (a.status === 'unconstrained' ? 0 : 1) - (b.status === 'unconstrained' ? 0 : 1) || a.wns - b.wns)
 
