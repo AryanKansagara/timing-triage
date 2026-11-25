@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { CAUSE_ORDER, CauseDot, SlackHistogram, Trend } from './charts.tsx'
-import { CAUSES, rootClock, whatIfFrequency, type Classified } from './engine/analyze.ts'
+import { CAUSES, rootClock, verdict, whatIfFrequency, type Classified } from './engine/analyze.ts'
 import { applyToSdc, causeLabel, fixesSdc, pathsCsv, type Fix } from './engine/fixes.ts'
 import { compare } from './engine/snapshot.ts'
 import type { Cause } from './engine/types.ts'
@@ -39,6 +39,7 @@ function Kpi({ label, value, note, tone }: { label: string; value: string; note?
 function Overview({ project, run }: TabProps) {
   const { r } = run
   const [hl, setHl] = useState<Cause | null>(null)
+  const v = verdict(r)
   const worstFmax = r.clocks.filter(c => c.fmax !== null && c.period).sort((a, b) => (a.fmax! * a.period!) - (b.fmax! * b.period!))[0]
   const lintErr = r.lint.filter(l => l.level === 'error').length
   // Clocks that time nothing (PLL feedback, unused outputs) only add noise to the table.
@@ -49,13 +50,15 @@ function Overview({ project, run }: TabProps) {
     <>
       {project.dataMissing && <div className="banner warn">The report files for this design live on another device. Constraints, fixes and history synced; re-import the report here to recompute paths.</div>}
       <div className="kpis">
-        <Kpi label="Setup WNS" value={`${fmtNs(r.wns)} ns`} tone={r.wns < 0 ? 'bad' : 'good'} note={r.wns < 0 ? 'Worst negative slack' : 'Setup met'} />
-        <Kpi label="Setup TNS" value={`${fmtNs(r.tns)} ns`} tone={r.tns < 0 ? 'bad' : 'good'} note="Sum of worst slack per endpoint" />
+        <Kpi label="Setup WNS" value={r.wns === null ? '—' : `${fmtNs(r.wns)} ns`} tone={r.wns === null ? undefined : r.wns < 0 ? 'bad' : 'good'} note={r.wns === null ? 'No setup results in report' : r.wns < 0 ? 'Worst negative slack' : 'Setup met'} />
+        <Kpi label="Setup TNS" value={r.wns === null ? '—' : `${fmtNs(r.tns)} ns`} tone={r.wns === null ? undefined : r.tns < 0 ? 'bad' : 'good'} note="Sum of worst slack per endpoint" />
         {r.endpoints
           ? <Kpi label="Failing endpoints" value={fmtN(r.endpoints.failing + r.endpoints.holdFailing)} note={`of ${fmtN(r.endpoints.total)} in the design · ${r.failing} worst path${r.failing === 1 ? '' : 's'} listed in this export`} tone={r.endpoints.failing + r.endpoints.holdFailing ? 'bad' : 'good'} />
           : r.summaryOnly
             ? <Kpi label="Failing paths" value="—" note="This report has per-clock summaries but no path tables" />
-            : <Kpi label="Failing paths" value={`${r.failing}`} note={`of ${fmtN(r.total)} listed · ${r.paths.length - r.total} cut by SDC`} tone={r.failing ? 'bad' : 'good'} />}
+            : !r.paths.length
+              ? <Kpi label="Failing paths" value="—" note="This report lists no paths" />
+              : <Kpi label="Failing paths" value={`${r.failing}`} note={`of ${fmtN(r.total)} listed · ${r.paths.length - r.total} cut by SDC`} tone={r.failing ? 'bad' : 'good'} />}
         <Kpi label="Hold WNS" value={r.holdWns === null ? '—' : `${fmtNs(r.holdWns)} ns`} tone={r.holdWns !== null && r.holdWns < 0 ? 'bad' : undefined} note={r.holdWns === null ? 'No hold paths in report' : r.holdWns < 0 ? 'Hold violations' : 'Hold met'} />
       </div>
       {r.defaultClocks.length > 0 && (
@@ -81,7 +84,7 @@ function Overview({ project, run }: TabProps) {
               <CauseDot cause={c.cause} /><span>{CAUSES[c.cause].short}</span><b className="mono">{c.paths.length}</b><small className="mono">{fmtNs(c.tns, 2)} ns</small>
             </button>
           ))}
-          {!r.causes.length && <span className="good-text small">No failing setup or hold paths. Timing is met.</span>}
+          {!r.causes.length && <span className={`${v.met ? 'good-text' : 'warn-text'} small`}>{v.text}</span>}
         </div>
         {hl && (
           <div className="cause-detail">
@@ -394,7 +397,7 @@ function Fixes({ project, run, update, ds }: TabProps) {
           <Link href={`/app/p/${project.id}/report`} className="btn sm primary">Closure report</Link>
         </div>
       </div>
-      {!fixes.length ? <Empty title="Nothing to fix"><p className="good-text">All timed paths meet setup and hold, and the constraints look sound.</p></Empty> : (
+      {!fixes.length ? <Empty title="Nothing to fix">{verdict(r).met ? <p className="good-text">All timed paths meet setup and hold, and the constraints look sound.</p> : <p className="warn-text">{verdict(r).text}</p>}</Empty> : (
         <div className="fix-list">
           {fixes.map((f, i) => {
             const canApply = !!f.sdc && f.sdc.split('\n').some(l => l.trim() && !l.trim().startsWith('#'))
@@ -446,7 +449,7 @@ function History({ project, run, update }: TabProps) {
             <tbody>{[...snaps].reverse().map(s => (
               <tr key={s.id}>
                 <th>{s.label}</th><td className="small">{new Date(s.at).toLocaleDateString()}</td>
-                <td className={`num mono ${s.wns < 0 ? 'bad-text' : ''}`}>{fmtNs(s.wns)}</td><td className="num mono">{fmtNs(s.tns)}</td><td className="num">{s.failing}</td>
+                <td className={`num mono ${(s.wns ?? 0) < 0 ? 'bad-text' : ''}`}>{fmtNs(s.wns)}</td><td className="num mono">{fmtNs(s.wns === null ? null : s.tns)}</td><td className="num">{s.total ? s.failing : '—'}</td>
                 <td>{Object.entries(s.causes).map(([c, n]) => <span key={c} className="cause-tag tiny"><CauseDot cause={c as Cause} />{n}</span>)}</td>
                 <td className="num"><button type="button" className="btn sm danger-ghost" onClick={async () => {
                   if (!(await ask(`Delete “${s.label}”?`, 'Removes this run from the history. You can undo for a few seconds.', 'Delete run'))) return
@@ -472,8 +475,8 @@ function History({ project, run, update }: TabProps) {
           </div>
           {d && A && B && <>
             <div className="kpis three">
-              <Kpi label="WNS change" value={`${signed(d.wns, v => v.toFixed(3))} ns`} tone={d.wns > 0 ? 'good' : d.wns < 0 ? 'bad' : undefined} note={`${fmtNs(A.wns)} → ${fmtNs(B.wns)}`} />
-              <Kpi label="TNS change" value={`${signed(d.tns, v => v.toFixed(2))} ns`} tone={d.tns > 0 ? 'good' : d.tns < 0 ? 'bad' : undefined} note={`${fmtNs(A.tns, 2)} → ${fmtNs(B.tns, 2)}`} />
+              <Kpi label="WNS change" value={Number.isNaN(d.wns) ? '—' : `${signed(d.wns, v => v.toFixed(3))} ns`} tone={Number.isNaN(d.wns) ? undefined : d.wns > 0 ? 'good' : d.wns < 0 ? 'bad' : undefined} note={`${fmtNs(A.wns)} → ${fmtNs(B.wns)}`} />
+              <Kpi label="TNS change" value={Number.isNaN(d.tns) ? '—' : `${signed(d.tns, v => v.toFixed(2))} ns`} tone={Number.isNaN(d.tns) ? undefined : d.tns > 0 ? 'good' : d.tns < 0 ? 'bad' : undefined} note={`${fmtNs(A.wns === null ? null : A.tns, 2)} → ${fmtNs(B.wns === null ? null : B.tns, 2)}`} />
               <Kpi label="Failing paths" value={signed(d.failing, String)} tone={d.failing < 0 ? 'good' : d.failing > 0 ? 'bad' : undefined} note={`${A.failing} → ${B.failing}`} />
             </div>
             <div className="grid-2">

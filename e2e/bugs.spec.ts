@@ -9,17 +9,26 @@ test.fail('#2 a report with no timing data cannot replace a good one', async ({ 
   await expect(analyzeButton(page)).toBeDisabled()
 })
 
-test.fail('#3 a clock table alone is not a met design', async ({ page }) => {
+test('#3 a clock table alone is not a met design', async ({ page }) => {
   await importFiles(page, ['clocks.rpt', clocks([['clk', '10.000']])])
   await expect(page.getByText('Setup slack distribution')).toBeVisible()
   await expect(kpi(page, 'Setup WNS').locator('b')).toHaveText('—')
   await expect(page.locator('main')).not.toContainText('Timing is met')
 })
 
-test.fail('#3 a failing summary without path tables is not called met', async ({ page }) => {
+test('#3 a failing summary without path tables is not called met', async ({ page }) => {
   await importFiles(page, ['sum.rpt', clocks([['clk', '10.000']]) + '\n' + summary('Setup', [['clk', '-5.000', '-20.000']])])
   await expect(kpi(page, 'Setup WNS').locator('b')).toHaveText('−5.000 ns')
   await expect(page.locator('main')).not.toContainText('Timing is met')
+})
+
+test('#3 a hold-only report does not claim setup is met, and its saved run stays unknown', async ({ page }) => {
+  await importFiles(page, ['hold.rpt', paths("Hold: 'clk'", [{ slack: '0.200', from: 'u|a', to: 'u|b', rel: '0.000' }])])
+  await expect(kpi(page, 'Hold WNS').locator('b')).toHaveText('0.200 ns')
+  await expect(kpi(page, 'Setup WNS').locator('b')).toHaveText('—')
+  await expect(page.locator('main')).not.toContainText(/Setup met|Timing is met/)
+  await page.goto('/app')
+  await expect(page.locator('.project-card')).toContainText('WNS—TNS—')
 })
 
 for (const [why, sdc] of [

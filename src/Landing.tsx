@@ -26,7 +26,7 @@ function HeroDemo() {
       <div className="demo-bar"><i /><i /><i /><strong>vga_uart_top.sta.rpt</strong><span className="badge synthetic">Synthetic</span></div>
       <div className="demo-body">
         <div className="demo-kpis">
-          <div><small>Setup WNS</small><b className={`mono ${r.wns < 0 ? 'bad-text' : 'good-text'}`}>{fmtNs(r.wns)}</b></div>
+          <div><small>Setup WNS</small><b className={`mono ${(r.wns ?? 0) < 0 ? 'bad-text' : 'good-text'}`}>{fmtNs(r.wns)}</b></div>
           <div><small>TNS</small><b className="mono">{fmtNs(r.tns, 1)}</b></div>
           <div><small>Failing</small><b className="mono">{r.failing}<span className="was">{done ? base.r.failing : ''}</span></b></div>
         </div>

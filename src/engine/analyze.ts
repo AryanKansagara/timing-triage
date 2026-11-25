@@ -46,7 +46,8 @@ export interface Result {
   crossings: Crossing[]
   lint: LintFinding[]
   unconstrainedPorts: { kind: 'input' | 'output'; name: string }[]
-  wns: number
+  /** Null when the report has no setup or recovery result that the SDC leaves uncut: unknown, not met */
+  wns: number | null
   tns: number
   holdWns: number | null
   holdTns: number
@@ -274,7 +275,7 @@ export function analyze({ report, sdcText, settings }: Inputs): Result {
     paths: all, clocks: clockStats, pairs, buses, causes, crossings,
     lint: sdc ? lintSdc(sdc, report.clocks, report.format) : [],
     unconstrainedPorts: names,
-    wns: finite(Math.min(...setupLive.map(p => p.slack), ...clockStats.map(c => c.wns), tot.setup?.wns ?? Infinity), 0)!,
+    wns: finite(Math.min(...setupLive.map(p => p.slack), ...clockStats.map(c => c.wns), tot.setup?.wns ?? Infinity), null),
     tns: round(Math.min(sumNeg(setupLive), clockStats.reduce((a, c) => a + c.tns, 0), tot.setup?.tns ?? 0)),
     holdWns: s.includeHold ? finite(Math.min(...holdLive.map(p => p.slack), ...clockStats.map(c => c.holdWns ?? Infinity), tot.hold?.wns ?? Infinity), null) : null,
     holdTns: s.includeHold ? round(Math.min(sumNeg(holdLive), clockStats.reduce((a, c) => a + c.holdTns, 0), tot.hold?.tns ?? 0)) : 0,
@@ -287,6 +288,15 @@ export function analyze({ report, sdcText, settings }: Inputs): Result {
     format: report.format, hasSdc: !!sdc,
     portCounts: !report.unconstrained.some(u => u.kind !== 'clock') && !sdc?.io.length && ((counts?.inputPorts ?? 0) || (counts?.outputPorts ?? 0)) ? { inputs: counts?.inputPorts ?? 0, outputs: counts?.outputPorts ?? 0 } : null,
   }
+}
+
+/** What can be said when no failing path is classified. Only `met` when setup and hold are both known and met. */
+export function verdict(r: Result): { met: boolean; text: string } {
+  const bad = [r.wns !== null && r.wns < 0 && `setup (WNS ${r.wns.toFixed(3)} ns)`, r.holdWns !== null && r.holdWns < 0 && `hold (WNS ${r.holdWns.toFixed(3)} ns)`].filter(Boolean)
+  if (bad.length || (r.endpoints && r.endpoints.failing + r.endpoints.holdFailing > 0)) return { met: false, text: `The report fails ${bad.join(' and ') || 'timing'}, but does not list the failing paths, so they cannot be classified.` }
+  if (r.wns === null) return { met: false, text: 'No timed setup paths or setup summary here, so setup timing is unknown.' }
+  if (r.holdWns === null) return { met: false, text: 'No failing setup paths. Hold is not part of this analysis, so it is unknown.' }
+  return { met: true, text: 'No failing setup or hold paths. Timing is met.' }
 }
 
 /**

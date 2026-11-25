@@ -54,7 +54,7 @@ export default function ProjectView({ id, tab: rawTab }: { id: string; tab: stri
         <div>
           <div className="eyebrow"><Link href="/app">Designs</Link></div>
           <h1 className="row gap wrap">{project.name} {project.sampleId && <SampleBadge id={project.sampleId} />}</h1>
-          {run && !empty && <p className="muted small mono" style={{ margin: 0 }}>{run.r.meta.tool ?? (run.report.format === 'vivado' ? 'Vivado' : 'Quartus')}{run.r.meta.device ? ` · ${run.r.meta.device}` : ''} · {run.r.total} paths · WNS {fmtNs(run.r.wns)} ns · TNS {fmtNs(run.r.tns)} ns</p>}
+          {run && !empty && <p className="muted small mono" style={{ margin: 0 }}>{run.r.meta.tool ?? (run.report.format === 'vivado' ? 'Vivado' : 'Quartus')}{run.r.meta.device ? ` · ${run.r.meta.device}` : ''} · {run.r.total} paths · WNS {fmtNs(run.r.wns)} ns · TNS {fmtNs(run.r.wns === null ? null : run.r.tns)} ns</p>}
         </div>
         {!empty && (
           <div className="toolbar">
