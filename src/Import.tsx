@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { detectFormat, parseReport } from './engine/parse.ts'
+import { detectFormat, hasData, parseReport } from './engine/parse.ts'
 import { samples } from './engine/sample.ts'
 import { lintSdc, parseSdc } from './engine/sdc.ts'
 import { snapshot } from './engine/snapshot.ts'
@@ -40,7 +40,7 @@ export default function DataTab({ project, ds, run, update }: { project: Project
     setFiles(x => [...x, ...next])
   }
 
-  const reports = files.filter(f => f.report && (f.report.format === 'quartus' || f.report.format === 'vivado'))
+  const reports = files.filter(f => f.report && (f.report.format === 'quartus' || f.report.format === 'vivado') && hasData(f.report))
   const sdc = files.find(f => f.format === 'sdc')
   const blocking = reports.length === 0 && !sdc
 
@@ -124,7 +124,7 @@ export default function DataTab({ project, ds, run, update }: { project: Project
 function Validation({ f, onRemove }: { f: Staged; onRemove(): void }) {
   const r = f.report
   const issues: Issue[] = r?.issues ?? []
-  const ok = f.format === 'sdc' || (r && (r.paths.length || r.clocks.length || r.summary.length))
+  const ok = f.format === 'sdc' || (r && hasData(r))
   return (
     <div className={`validation ${ok ? 'ok' : 'bad'}`}>
       <div className="row between gap-sm wrap">
