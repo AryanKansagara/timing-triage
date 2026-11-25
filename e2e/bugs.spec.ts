@@ -118,7 +118,7 @@ test('#13 a top-level counter is not I/O', async ({ page }) => {
   await expect(page.getByRole('button', { name: /Logic depth/ })).toBeVisible()
 })
 
-test.fail('#14 endpoints past the stored limit are not reported as new', async ({ page }) => {
+test('#14 endpoints past the stored limit are not reported as new', async ({ page }) => {
   const many = (from: number) => paths('Setup: clk', Array.from({ length: 500 - from }, (_, i) => ({ slack: (-6 + (i + from) / 100).toFixed(3), from: 'u|a', to: `u|r${i + from}` })))
   await importFiles(page, ['one.rpt', many(0)])
   await tab(page, 'Data')
@@ -128,4 +128,5 @@ test.fail('#14 endpoints past the stored limit are not reported as new', async (
   await tab(page, 'History')
   await expect(page.getByText(/\d+ fixed/)).toBeVisible()
   await expect(page.getByText(/\b100 new/)).toHaveCount(0)
+  await expect(page.getByText('at least 100 fixed · new unknown · at least 300 still failing')).toBeVisible()
 })
