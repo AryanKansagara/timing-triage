@@ -4,7 +4,7 @@ import { samples } from './engine/sample.ts'
 import { lintSdc, parseSdc } from './engine/sdc.ts'
 import { snapshot } from './engine/snapshot.ts'
 import type { Format, Issue, ParsedReport } from './engine/types.ts'
-import { createBlankProject, runAnalysis, type Run } from './projectData.ts'
+import { combineSdc, createBlankProject, runAnalysis, type Run } from './projectData.ts'
 import { putData, uuid, type Dataset, type Project } from './store.ts'
 import { fmtN, go, Link, toast } from './ui.tsx'
 
@@ -41,7 +41,8 @@ export default function DataTab({ project, ds, run, update }: { project: Project
   }
 
   const reports = files.filter(f => f.report && (f.report.format === 'quartus' || f.report.format === 'vivado') && hasData(f.report))
-  const sdc = files.find(f => f.format === 'sdc')
+  const sdcFiles = files.filter(f => f.format === 'sdc')
+  const sdc = combineSdc(sdcFiles)
   const blocking = reports.length === 0 && !sdc
 
   const commit = async () => {
@@ -98,7 +99,7 @@ export default function DataTab({ project, ds, run, update }: { project: Project
       {files.length > 0 && (
         <div className="panel">
           <div className="panel-head"><h2>Validation</h2><button type="button" className="btn sm ghost" onClick={() => setFiles([])}>Clear</button></div>
-          {files.map(f => <Validation key={f.id} f={f} onRemove={() => setFiles(x => x.filter(y => y.id !== f.id))} />)}
+          {files.map(f => <Validation key={f.id} f={f} order={sdcFiles.length > 1 ? `${sdcFiles.indexOf(f) + 1} of ${sdcFiles.length}` : ''} onRemove={() => setFiles(x => x.filter(y => y.id !== f.id))} />)}
           <div className="row gap wrap end commit">
             {reports.length > 0 && <label className="field grow"><span>Run name</span><input value={label} onChange={e => setLabel(e.target.value)} placeholder={`Run ${project.snapshots.length + 1}`} /></label>}
             <button type="button" className="btn primary" disabled={blocking || busy} onClick={() => void commit()}>{busy ? 'Analyzing' : reports.length ? `Analyze ${reports.length} report${reports.length > 1 ? 's' : ''}${sdc ? ' + SDC' : ''}` : 'Replace constraints'}</button>
@@ -121,7 +122,7 @@ export default function DataTab({ project, ds, run, update }: { project: Project
   )
 }
 
-function Validation({ f, onRemove }: { f: Staged; onRemove(): void }) {
+function Validation({ f, order, onRemove }: { f: Staged; order: string; onRemove(): void }) {
   const r = f.report
   const issues: Issue[] = r?.issues ?? []
   const ok = f.format === 'sdc' || (r && hasData(r))
@@ -131,7 +132,7 @@ function Validation({ f, onRemove }: { f: Staged; onRemove(): void }) {
         <div className="row gap-sm"><span className={`badge ${ok ? 'low' : 'severe'}`}>{f.format === 'sdc' ? 'SDC / XDC' : f.format === 'quartus' ? 'Quartus Timing Analyzer' : f.format === 'vivado' ? 'Vivado' : 'Unrecognised'}</span><b className="mono break">{f.name}</b></div>
         <button type="button" className="linkish small" onClick={onRemove}>Remove</button>
       </div>
-      {f.sdcInfo && <p className="small">{f.sdcInfo.stmts} commands, {f.sdcInfo.clocks} clocks, {f.sdcInfo.lint} lint finding{f.sdcInfo.lint === 1 ? '' : 's'}. Will replace the current constraints.</p>}
+      {f.sdcInfo && <p className="small">{f.sdcInfo.stmts} commands, {f.sdcInfo.clocks} clocks, {f.sdcInfo.lint} lint finding{f.sdcInfo.lint === 1 ? '' : 's'}. {order ? `File ${order} that together, in this order, will replace the current constraints.` : 'Will replace the current constraints.'}</p>}
       {r && (r.paths.length > 0 || r.clocks.length > 0) && <>
         <p className="small">{[r.meta?.tool, r.meta?.design, r.meta?.device].filter(Boolean).join(' · ')}{r.meta?.tool ? '. ' : ''}{r.paths.length} paths ({r.paths.filter(p => p.slack < 0).length} negative slack) · {r.clocks.length} clocks · {r.unconstrained.length} unconstrained items. Found: {r.found.join(', ') || 'nothing'}.</p>
         {r.paths.length > 0 && <div className="map-grid" aria-label="Field mapping">
