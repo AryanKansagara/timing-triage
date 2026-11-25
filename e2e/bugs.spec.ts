@@ -95,7 +95,7 @@ test('#9 recovery and removal summaries count', async ({ page }) => {
   await expect(kpi(page, 'Setup WNS').locator('b')).toHaveText('−3.200 ns')
 })
 
-test.fail('#10 a node name cannot become a spreadsheet formula', async ({ page }) => {
+test('#10 a node name cannot become a spreadsheet formula', async ({ page }) => {
   await importFiles(page, ['x.rpt', paths('Setup: clk', [{ slack: '-1.000', from: '=HYPERLINK(1)', to: 'u|b' }])])
   await tab(page, 'Paths')
   expect((await exported(page, 'Export CSV')).text).not.toMatch(/(^|,)"?=/m)

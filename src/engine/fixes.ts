@@ -1,4 +1,5 @@
 import { bus, CAUSES, rootClock, type Classified, type Result } from './analyze.ts'
+import { tclSafe } from './sdc.ts'
 import type { Cause, Clock, Settings } from './types.ts'
 import { DEFAULT_SETTINGS } from './types.ts'
 
@@ -18,6 +19,11 @@ export interface Fix {
   severity: 'error' | 'warn' | 'info'
 }
 
+export const LEFT_OUT = '# Left out: a name here has characters that could run as Tcl code.'
+/** Tcl lines for these names, or a note when one of the names could break out of its braces. */
+const tcl = (names: (string | undefined)[], lines: string) => names.every(n => n === undefined || tclSafe(n)) ? lines : LEFT_OUT
+/** Text inside a # comment: nothing may end the line or continue it. */
+const comment = (s: string) => s.replace(/[\u0000-\u001f\u007f\u0085\u2028\u2029]+/g, ' ').replace(/[\\\s]+$/, '')
 const brace = (n: string) => `{${n}}`
 const f3 = (n: number) => n.toFixed(3)
 
@@ -66,7 +72,7 @@ export function buildFixes(r: Result, clocks: Clock[], settings: Partial<Setting
       id: `noclock:${clk}`, cause: 'noclock', severity: 'error',
       title: `Give ${short(clk)} a real clock constraint`,
       why: `${r.hasSdc ? 'The SDC does not constrain this clock' : 'The project has no SDC'}, so Quartus ran derive_clocks -period 1.0 and timed ${clk} at 1000 MHz. ${ps.length ? `All ${ps.length} failing path${ps.length > 1 ? 's' : ''} on it are` : 'Its slack is'} measured against that placeholder.${st?.fmax ? ` The design runs at up to ${st.fmax.toFixed(2)} MHz on this clock${st.fmaxFrom === 'report' ? ' (Quartus Fmax summary)' : ''}, so any real target at or below that already meets setup.` : ''}`,
-      sdc: [`# Set -period to the real clock on this pin. Value below: ${basis}.`, `create_clock -name {${clk}} -period ${f3(sug.period)} ${target}`, ...(i === 0 && !r.hasSdc ? ['derive_pll_clocks', 'derive_clock_uncertainty'] : [])].join('\n'),
+      sdc: [`# Set -period to the real clock on this pin. Value below: ${basis}.`, tcl([clk], `create_clock -name {${clk}} -period ${f3(sug.period)} ${target}`), ...(i === 0 && !r.hasSdc ? ['derive_pll_clocks', 'derive_clock_uncertainty'] : [])].join('\n'),
       steps: [
         'Save the lines as <revision>.sdc next to the .qpf and add it to the project (Assignments > Settings > Timing Analyzer), then recompile so the Fitter optimises for the real target.',
         'Applying the fix here re-estimates same-clock setup slack at the new period; hold slack does not depend on the period.',
@@ -81,6 +87,7 @@ export function buildFixes(r: Result, clocks: Clock[], settings: Partial<Setting
     const base = r.clocks.find(c => c.period && !c.isDefault)
     const vivado = r.format === 'vivado'
     const lines = r.unconstrainedClocks.slice(0, 12).map(n => {
+      if (![n, base?.clock ?? ''].every(tclSafe)) return LEFT_OUT
       if (!isHier(n) && /\[\d+\]$/.test(n) && !vivado) return `create_generated_clock -name {${n}} -source [get_ports {${base?.clock ?? 'clk'}}] -divide_by 2 [get_registers {${n}}]`
       const nm = n.replace(/\/[A-Z]+$/, '').split(/[|/]/).pop()!.replace(/[^\w]/g, '_')
       if (!isHier(n)) { const sug = suggestPeriod(n, null); return `create_clock -name {${n}} -period ${f3(sug.period)} [get_ports {${n}}]` }
@@ -124,7 +131,7 @@ export function buildFixes(r: Result, clocks: Clock[], settings: Partial<Setting
       id: `cdc:${key}`, cause: 'cdc', severity: ps.length ? 'error' : 'warn',
       title: `Declare ${short(a)} and ${short(b)} asynchronous`,
       why: `${viv ? 'Vivado' : 'Timing Analyzer'} assumes ${short(a)} and ${short(b)} are related and times ${crossings.reduce((n, x) => n + x.paths, 0)} crossing path${crossings.length === 1 && crossings[0].paths === 1 ? '' : 's'} against the closest pair of edges, which is not a real requirement. The crossing needs a synchronizer in RTL and a constraint that says the clocks are unrelated.`,
-      sdc: `set_clock_groups -asynchronous \\\n  -group [get_clocks {${ga.join(' ')}}] \\\n  -group [get_clocks {${gb.join(' ')}}]`,
+      sdc: tcl([...ga, ...gb], `set_clock_groups -asynchronous \\\n  -group [get_clocks {${ga.join(' ')}}] \\\n  -group [get_clocks {${gb.join(' ')}}]`),
       steps: [...new Set(steps)].slice(0, 8),
       pathIds: ps.map(p => p.id), tns: tnsOf(ps),
     })
@@ -157,7 +164,7 @@ export function buildFixes(r: Result, clocks: Clock[], settings: Partial<Setting
         `Only if the destination is enabled every 2nd cycle, a multicycle exception is valid instead (shown below with its hold pair).`,
       ],
       qsf: viv ? 'set_property STEPS.SYNTH_DESIGN.ARGS.RETIMING true [get_runs synth_1]' : 'set_global_assignment -name ALLOW_REGISTER_RETIMING ON',
-      sdc: `# Only valid if ${to} is enabled every 2nd clock:\n# set_multicycle_path -setup 2 -from [${regs} {${from}}] -to [${regs} {${to}}]\n# set_multicycle_path -hold 1 -from [${regs} {${from}}] -to [${regs} {${to}}]`,
+      sdc: tcl([from, to], `# Only valid if ${to} is enabled every 2nd clock:\n# set_multicycle_path -setup 2 -from [${regs} {${from}}] -to [${regs} {${to}}]\n# set_multicycle_path -hold 1 -from [${regs} {${from}}] -to [${regs} {${to}}]`),
       pathIds: ps.map(p => p.id), tns: tnsOf(ps),
     })
   }
@@ -180,7 +187,7 @@ export function buildFixes(r: Result, clocks: Clock[], settings: Partial<Setting
       id: `fanout:${from}`, cause: 'fanout', severity: 'error',
       title: `Duplicate ${from} (fanout ${fo})`,
       why: `${from} drives ${fo} loads, so its net is spread across the die and every load waits for the slowest branch. ${ps.length} failing path${ps.length > 1 ? 's' : ''} start here.`,
-      qsf: viv ? `set_property MAX_FANOUT ${Math.max(16, Math.min(64, Math.round(fo / 16)))} [get_cells ${brace(cell(from))}]` : `set_instance_assignment -name MAX_FANOUT ${Math.max(16, Math.min(64, Math.round(fo / 16)))} -to ${brace(from)}`,
+      qsf: tcl([viv ? cell(from) : from], viv ? `set_property MAX_FANOUT ${Math.max(16, Math.min(64, Math.round(fo / 16)))} [get_cells ${brace(cell(from))}]` : `set_instance_assignment -name MAX_FANOUT ${Math.max(16, Math.min(64, Math.round(fo / 16)))} -to ${brace(from)}`),
       steps: [
         viv ? 'Let synthesis replicate the register with the MAX_FANOUT property below, run phys_opt_design -fanout_opt, or duplicate it by hand per consuming block.' : 'Let the Fitter duplicate the register with the MAX_FANOUT assignment below, or duplicate it by hand per consuming block.',
         /rst|reset/i.test(from) ? 'This looks like a reset: make it synchronous per clock domain and pipeline it through a reset tree, or put it on a global buffer.' : 'Add a pipeline register per consumer group so each copy has a local, small fanout.',
@@ -209,15 +216,15 @@ export function buildFixes(r: Result, clocks: Clock[], settings: Partial<Setting
     const clk = st?.clock ?? 'clk'
     const per = st?.isDefault ? suggestPeriod(clk, st.fmax).period : st?.period ?? 10
     const lines = ['# Board-level clock that launches/captures the external device; adjust to the real interface.', `create_clock -name virt_${clk.replace(/[^\w]/g, '_')} -period ${f3(per)}`]
-    for (const p of inPorts) lines.push(`set_input_delay -clock virt_${clk.replace(/[^\w]/g, '_')} -max ${f3(per * 0.4)} [get_ports {${p}}]`, `set_input_delay -clock virt_${clk.replace(/[^\w]/g, '_')} -min 0.000 [get_ports {${p}}]`)
-    for (const p of outPorts) lines.push(`set_output_delay -clock virt_${clk.replace(/[^\w]/g, '_')} -max ${f3(per * 0.3)} [get_ports {${p}}]`, `set_output_delay -clock virt_${clk.replace(/[^\w]/g, '_')} -min 0.000 [get_ports {${p}}]`)
+    for (const p of inPorts) lines.push(...!tclSafe(p) ? [LEFT_OUT] : [`set_input_delay -clock virt_${clk.replace(/[^\w]/g, '_')} -max ${f3(per * 0.4)} [get_ports {${p}}]`, `set_input_delay -clock virt_${clk.replace(/[^\w]/g, '_')} -min 0.000 [get_ports {${p}}]`])
+    for (const p of outPorts) lines.push(...!tclSafe(p) ? [LEFT_OUT] : [`set_output_delay -clock virt_${clk.replace(/[^\w]/g, '_')} -max ${f3(per * 0.3)} [get_ports {${p}}]`, `set_output_delay -clock virt_${clk.replace(/[^\w]/g, '_')} -min 0.000 [get_ports {${p}}]`])
     const ports = [...new Set(ioPaths.map(p => bus(p.port ? p[p.port] : p.from.includes('|') || p.from.includes('/') ? p.to : p.from)))]
     out.push({
       id: 'io', cause: 'io', severity: ioPaths.length ? 'error' : 'warn',
       title: inPorts.size || outPorts.size ? `Constrain ${inPorts.size + outPorts.size} unconstrained I/O port group${inPorts.size + outPorts.size > 1 ? 's' : ''}` : `Fix I/O timing on ${ports.slice(0, 2).join(', ')}`,
       why: `${inPorts.size + outPorts.size ? `Ports without set_input_delay or set_output_delay are not timed at all, so the Fitter can place their registers anywhere. ` : ''}${ioPaths.length ? `${ioPaths.length} I/O path${ioPaths.length > 1 ? 's fail' : ' fails'}: the external budget leaves too little time inside the FPGA.` : ''}`.trim(),
       sdc: inPorts.size || outPorts.size ? lines.join('\n') : undefined,
-      qsf: !ports.length ? undefined : viv ? ports.map(p => `set_property IOB TRUE [get_ports ${brace(p)}]`).join('\n') : ports.map(p => `set_instance_assignment -name ${ioPaths.some(x => x.port !== 'to' && bus(x.from) === p) ? 'FAST_INPUT_REGISTER' : 'FAST_OUTPUT_REGISTER'} ON -to ${brace(p)}`).join('\n'),
+      qsf: !ports.length ? undefined : viv ? ports.map(p => tcl([p], `set_property IOB TRUE [get_ports ${brace(p)}]`)).join('\n') : ports.map(p => tcl([p], `set_instance_assignment -name ${ioPaths.some(x => x.port !== 'to' && bus(x.from) === p) ? 'FAST_INPUT_REGISTER' : 'FAST_OUTPUT_REGISTER'} ON -to ${brace(p)}`)).join('\n'),
       steps: [
         'Take -max/-min from the external device datasheet and board trace delay; the values below are placeholders sized from the clock period.',
         'Asynchronous inputs (buttons, UART RX) need a synchronizer, then a set_false_path -from the port instead of an input delay.',
@@ -257,7 +264,7 @@ export function buildFixes(r: Result, clocks: Clock[], settings: Partial<Setting
         viv ? 'Make sure the clock is on a BUFG or BUFR (report_clock_utilization), not on general routing.' : 'Make sure the clock is on a global or regional network (Fitter report: Global & Other Fast Signals).',
         'Hold failures here are usually fixed automatically once the clock is global; do not add delay by hand.',
       ],
-      qsf: viv ? undefined : [...new Set(skewPaths.map(p => p.latch))].map(c => `set_instance_assignment -name GLOBAL_SIGNAL "GLOBAL CLOCK" -to ${brace(c)}`).join('\n'),
+      qsf: viv ? undefined : [...new Set(skewPaths.map(p => p.latch))].map(c => tcl([c], `set_instance_assignment -name GLOBAL_SIGNAL "GLOBAL CLOCK" -to ${brace(c)}`)).join('\n'),
       pathIds: skewPaths.map(p => p.id), tns: tnsOf(skewPaths),
     })
   }
@@ -284,14 +291,18 @@ const short = (n: string) => n.length > 34 ? '…' + n.slice(-32) : n
 /** Appends fix lines to the SDC once, with a dated comment header. */
 export function applyToSdc(sdc: string, fix: Fix, date = new Date().toISOString().slice(0, 10)) {
   if (!fix.sdc || sdc.includes(fix.sdc)) return sdc
-  return `${sdc.replace(/\s*$/, '')}\n\n# Timing Triage ${date}: ${fix.title}\n${fix.sdc}\n`
+  return `${sdc.replace(/\s*$/, '')}\n\n# Timing Triage ${date}: ${comment(fix.title)}\n${fix.sdc}\n`
 }
 
 export const causeLabel = (c: Fix['cause']) => c === 'sdc' ? 'Constraint lint' : CAUSES[c].short
 
 // ---------- Exports ----------
 
-const csvCell = (v: unknown) => { const s = v === undefined || v === null ? '' : String(v); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s }
+/** A spreadsheet runs text that starts like a formula, so it gets a leading apostrophe. Numbers stay numbers. */
+const csvCell = (v: unknown) => {
+  const s = v === undefined || v === null ? '' : typeof v === 'string' && /^\s*[=+\-@＝＋－＠]/.test(v) ? `'${v}` : String(v)
+  return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
+}
 
 export function pathsCsv(r: Result) {
   const head = ['analysis', 'slack_ns', 'from', 'to', 'launch_clock', 'latch_clock', 'relationship_ns', 'clock_skew_ns', 'data_delay_ns', 'logic_levels', 'max_fanout', 'root_cause', 'cut_by_sdc_line', 'source_line']
@@ -300,6 +311,6 @@ export function pathsCsv(r: Result) {
 }
 
 export function fixesSdc(fixes: Fix[], design: string) {
-  const parts = fixes.filter(f => f.sdc).map(f => `# ${f.title}\n${f.sdc}`)
-  return `# Suggested constraints for ${design}\n# Review every line before adding it to your project .sdc.\n\n${parts.join('\n\n')}\n`
+  const parts = fixes.filter(f => f.sdc).map(f => `# ${comment(f.title)}\n${f.sdc}`)
+  return `# Suggested constraints for ${comment(design)}\n# Review every line before adding it to your project .sdc.\n\n${parts.join('\n\n')}\n`
 }
