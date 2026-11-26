@@ -1,5 +1,5 @@
 // A small SDC reader: enough Tcl to understand the constraint commands Timing Analyzer cares about.
-import type { Clock, Issue } from './types.ts'
+import type { Analysis, Clock, Issue } from './types.ts'
 
 export interface Stmt { cmd: string; words: string[]; line: number; text: string }
 
@@ -120,7 +120,7 @@ export const matches = (c: Collection, name: string) => c.patterns.some(p => glo
 // ---------- Model ----------
 
 export interface ClockGroups { line: number; groups: Collection[]; kind: string }
-export interface Cut { line: number; from?: Collection; to?: Collection; through?: boolean; text: string }
+export interface Cut { line: number; from?: Collection; to?: Collection; through?: boolean; text: string; /** Check the cut is limited to */ only?: 'setup' | 'hold'; /** Limited by -through or a clock edge, which a text report cannot be matched against */ partial?: boolean; /** Edge-limited endpoint options, e.g. -rise_from */ edges: Collection[] }
 export interface Multicycle { line: number; setup: boolean; hold: boolean; n: number; from?: Collection; to?: Collection; text: string }
 export interface IoDelay { line: number; dir: 'input' | 'output'; clock?: string; ports: Collection; value?: number; max: boolean; min: boolean }
 
@@ -163,7 +163,12 @@ export function parseSdc(text: string): SdcModel {
         break
       }
       case 'set_false_path':
-        m.falsePaths.push({ line: s.line, from: first('-from') ? collection(first('-from')) : undefined, to: first('-to') ? collection(first('-to')) : undefined, through: o.opts.has('-through'), text: s.text })
+        {
+          const edges = ['-rise_from', '-fall_from', '-rise_to', '-fall_to'].flatMap(k => o.opts.get(k) ?? []).map(collection)
+          const through = [...o.opts.keys()].some(k => /^-(rise_|fall_)?through$/.test(k))
+          const only = o.flags.has('-setup') === o.flags.has('-hold') ? undefined : o.flags.has('-setup') ? 'setup' : 'hold'
+          m.falsePaths.push({ line: s.line, from: first('-from') ? collection(first('-from')) : undefined, to: first('-to') ? collection(first('-to')) : undefined, through, text: s.text, only, edges, partial: through || edges.length > 0 || o.flags.has('-rise') || o.flags.has('-fall') })
+        }
         break
       case 'set_multicycle_path':
         m.multicycles.push({ line: s.line, setup: o.flags.has('-setup') || !o.flags.has('-hold'), hold: o.flags.has('-hold'), n: Number(o.pos[0]), from: first('-from') ? collection(first('-from')) : undefined, to: first('-to') ? collection(first('-to')) : undefined, text: s.text })
@@ -188,15 +193,23 @@ const stripBraces = (s: string | undefined) => s?.replace(/^\{|\}$/g, '').trim()
 
 const clockSide = (c: Collection | undefined) => !!c && c.kind === 'get_clocks'
 
-/** True when the SDC cuts timing between two clocks (clock groups or a clock-to-clock false path). */
-export function clocksCut(m: SdcModel | null, a: string, b: string): number | null {
+/** -setup covers setup and recovery, -hold covers hold and removal. */
+const applies = (f: Cut, a: Analysis) => !f.partial && (!f.only || (f.only === 'setup') === (a === 'setup' || a === 'recovery'))
+
+/**
+ * SDC line that cuts timing between two clocks (clock groups or a clock-to-clock false path), or null.
+ * Without an analysis the clocks count as cut only when setup and hold are both cut.
+ */
+export function clocksCut(m: SdcModel | null, a: string, b: string, analysis?: Analysis): number | null {
   if (!m || a === b) return null
+  if (!analysis) return clocksCut(m, a, b, 'hold') === null ? null : clocksCut(m, a, b, 'setup')
   for (const g of m.groups) {
     const ia = g.groups.findIndex(x => matches(x, a)), ib = g.groups.findIndex(x => matches(x, b))
     if (g.groups.length === 1) { if ((ia === 0) !== (ib === 0)) return g.line }
     else if (ia >= 0 && ib >= 0 && ia !== ib) return g.line
   }
   for (const f of m.falsePaths) {
+    if (!applies(f, analysis)) continue
     if (clockSide(f.from) && clockSide(f.to) && matches(f.from!, a) && matches(f.to!, b)) return f.line
     if (clockSide(f.from) && !f.to && matches(f.from!, a)) return f.line
     if (clockSide(f.to) && !f.from && matches(f.to!, b)) return f.line
@@ -204,11 +217,11 @@ export function clocksCut(m: SdcModel | null, a: string, b: string): number | nu
   return null
 }
 
-/** True when a node-level false path covers this path. */
-export function pathCut(m: SdcModel | null, from: string, to: string): number | null {
+/** SDC line of a node-level false path that covers this path, or null. */
+export function pathCut(m: SdcModel | null, from: string, to: string, analysis: Analysis = 'setup'): number | null {
   if (!m) return null
   for (const f of m.falsePaths) {
-    if (clockSide(f.from) || clockSide(f.to) || f.through) continue
+    if (clockSide(f.from) || clockSide(f.to) || !applies(f, analysis)) continue
     const okF = !f.from || matches(f.from, from)
     const okT = !f.to || matches(f.to, to)
     if (okF && okT && (f.from || f.to)) return f.line
@@ -276,11 +289,13 @@ export function lintSdc(m: SdcModel, reportClocks: Clock[] = [], tool: string = 
   }
 
   for (const f of m.falsePaths) {
-    const pats = [...(f.from?.patterns ?? []), ...(f.to?.patterns ?? [])]
-    if (!f.from && !f.to && !f.through) add('broad_false_path', f.line, 'error', 'set_false_path with no -from, -to or -through cuts every path in the design.')
+    const pats = [...(f.from?.patterns ?? []), ...(f.to?.patterns ?? []), ...f.edges.flatMap(e => e.patterns)]
+    if (!f.from && !f.to && !f.through && !f.edges.length) add('broad_false_path', f.line, 'error', 'set_false_path with no -from, -to or -through cuts every path in the design.')
     else if (pats.some(p => p === '*' || p === '*|*')) add('broad_false_path', f.line, 'warn', `Overly broad false path: "${f.text.slice(0, 90)}". A bare * matches every register or clock, which hides real failures.`)
     else if (clockSide(f.from) && clockSide(f.to)) add('false_path_clocks', f.line, 'info', 'Clock-to-clock false path. set_clock_groups -asynchronous states the intent more clearly and cuts both directions.')
   }
+
+  for (const f of m.falsePaths) if (f.partial) add('partial_false_path', f.line, 'info', 'This false path is limited by -through or by a clock or data edge, which a text report cannot be matched against. It is not applied here, so paths it cuts may still be listed.')
 
   for (const mc of m.multicycles) {
     if (!mc.setup || mc.hold) continue
