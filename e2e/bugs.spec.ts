@@ -1,7 +1,7 @@
 // Known bugs. Each test states the correct behaviour and is marked test.fail until its issue is fixed.
 import { analyzeButton, choose, clocks, crossing, expect, exported, HAND, importFiles, kpi, newDesign, paths, setSdc, summary, tab, test, unconstrained } from './fixtures.ts'
 
-test.fail('#2 a report with no timing data cannot replace a good one', async ({ page }) => {
+test('#2 a report with no timing data cannot replace a good one', async ({ page }) => {
   await importFiles(page, ['hand.rpt', HAND])
   await tab(page, 'Data')
   await choose(page, ['cut.rpt', '| Tool Version      : Vivado v.2024.2 (lin64)\n'])
@@ -43,7 +43,7 @@ test('#5 a half-cycle path keeps half of the new period when re-timed', async ({
   await expect(kpi(page, 'Setup WNS').locator('b')).toHaveText('−5.200 ns')
 })
 
-test.fail('#6 the worst corner wins when two files list the same path', async ({ page }) => {
+test('#6 the worst corner wins when two files list the same path', async ({ page }) => {
   const p = (slack: string) => paths('Setup: clk', [{ slack, from: 'u|a', to: 'u|b' }])
   await importFiles(page, ['fast.rpt', p('3.000')], ['slow.rpt', p('-1.500')])
   await expect(kpi(page, 'Setup WNS').locator('b')).toHaveText('−1.500 ns')
@@ -68,12 +68,12 @@ test.fail('#7 [all_inputs] constrains the input ports', async ({ page }) => {
   await expect(page.getByText(/not constrained, so/)).toHaveCount(0)
 })
 
-test.fail('#8 a Unicode minus is still negative', async ({ page }) => {
+test('#8 a Unicode minus is still negative', async ({ page }) => {
   await importFiles(page, ['x.rpt', paths('Setup: clk', [{ slack: '−1.234', from: 'u|a', to: 'u|b' }])])
   await expect(kpi(page, 'Setup WNS').locator('b')).toHaveText('−1.234 ns')
 })
 
-test.fail('#8 a report cut off in its last row says rows are missing', async ({ page }) => {
+test('#8 a report cut off in its last row says rows are missing', async ({ page }) => {
   await newDesign(page)
   const t = paths('Setup: clk', [{ slack: '2.000', from: 'u|a', to: 'u|b' }, { slack: '-4.000', from: 'u|c', to: 'u|d' }])
   await choose(page, ['cut.rpt', t.slice(0, t.indexOf('-4.000') + 10)])
