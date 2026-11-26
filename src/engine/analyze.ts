@@ -199,23 +199,32 @@ export function analyze({ report, sdcText, settings }: Inputs): Result {
     const stale = (a: Analysis) => all.some(p => p.cutBy !== null && p.latch === c && isMax(p.analysis) === isMax(a))
     const sum = (a: Analysis) => !stale(a) ? report.summary.find(x => x.clock === c && x.analysis === a) : undefined
     const moved = shift.get(c)
+    // Recovery is a max-delay check and removal a min-delay one, like their path rows. Their endpoints are separate.
     // A retimed clock keeps its summary slack, shifted by the period change; its total is no longer known.
-    const sumS = moved && sum('setup') ? { ...sum('setup')!, slack: sum('setup')!.slack + moved.to - moved.from, tns: 0 } : sum('setup')
-    const sumH = s.includeHold ? sum('hold') : undefined
-    const wns = Math.min(setup.length ? Math.min(...setup.map(p => p.slack)) : Infinity, sumS?.slack ?? Infinity)
+    const worst = (ans: Analysis[], listed: Classified[]) => {
+      const rows = ans.map(sum)
+      const shown = rows.map(x => x && moved && isMax(x.analysis) ? { ...x, slack: x.slack + moved.to - moved.from, tns: 0 } : x)
+      // A met recovery or removal row alone does not say that setup or hold is met.
+      if (!shown[0] && !listed.length && (shown[1]?.slack ?? 0) >= 0) shown[1] = undefined
+      const tns = shown.reduce((t, x, i) => t + Math.min(x?.tns ?? 0, sumNeg(listed.filter(p => p.analysis === ans[i]))), 0)
+      return { slack: Math.min(...shown.map(x => x?.slack ?? Infinity)), tns: shown.some(Boolean) ? Math.min(tns, sumNeg(listed)) : sumNeg(listed), failing: shown[0]?.failing }
+    }
+    const sumS = worst(['setup', 'recovery'], setup)
+    const sumH = s.includeHold ? worst(['hold', 'removal'], hold) : { slack: Infinity, tns: sumNeg(hold) }
+    const wns = Math.min(setup.length ? Math.min(...setup.map(p => p.slack)) : Infinity, sumS.slack)
     const same = setup.filter(p => p.launch === c)
     const per = period(c)
     const reported = report.fmax?.find(x => x.clock === c)
     // Each path needs its requirement minus its slack; divided by its cycles, that is the period it allows.
     const need = per && same.length ? Math.max(...same.map(p => per - p.slack / cycles(p, per))) : 0
     const est = need > 0 ? 1000 / need : null
-    const holdWns = Math.min(hold.length ? Math.min(...hold.map(p => p.slack)) : Infinity, sumH?.slack ?? Infinity)
+    const holdWns = Math.min(hold.length ? Math.min(...hold.map(p => p.slack)) : Infinity, sumH.slack)
     return {
-      clock: c, period: per, wns: round(wns), tns: round(Math.min(sumNeg(setup), sumS?.tns ?? 0)),
+      clock: c, period: per, wns: round(wns), tns: round(sumS.tns),
       failing: mine.filter(p => p.slack < 0).length, total: mine.length,
-      holdWns: Number.isFinite(holdWns) ? round(holdWns) : null, holdTns: round(Math.min(sumNeg(hold), sumH?.tns ?? 0)),
+      holdWns: Number.isFinite(holdWns) ? round(holdWns) : null, holdTns: round(sumH.tns),
       fmax: reported?.fmax ?? est, fmaxFrom: reported ? 'report' : est ? 'estimate' : null, fmaxEst: est,
-      endpoints: sumS?.failing, isDefault: defaults.has(c),
+      endpoints: sumS.failing, isDefault: defaults.has(c),
     } satisfies ClockStat
   }).sort((a, b) => a.wns - b.wns)
 
