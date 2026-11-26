@@ -41,6 +41,7 @@ cp .env.example .env   # optional, enables sync
 npm run dev
 npm test               # engine tests
 npm run build
+npm run test:e2e      # builds, then runs the Playwright suite (npx playwright install chromium once; E2E_PORT picks the port)
 ```
 
 Built by Aryan Kansagara.
