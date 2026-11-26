@@ -1,23 +1,25 @@
 import { useEffect, useMemo, useState } from 'react'
 import { analyze } from './engine/analyze.ts'
 import { buildFixes } from './engine/fixes.ts'
-import { detectFormat, parseReport } from './engine/parse.ts'
+import { detectFormat, mergePath, parseReport } from './engine/parse.ts'
 import { samples } from './engine/sample.ts'
 import { snapshot } from './engine/snapshot.ts'
-import type { ParsedReport } from './engine/types.ts'
+import type { ParsedReport, TimingPath } from './engine/types.ts'
 import { getData, getDefaults, getProjects, saveProject, useProjects, uuid, type Dataset, type Project } from './store.ts'
 
 /** Several report files (e.g. .sta.rpt plus a report_timing export) become one report. */
 export function combine(list: ParsedReport[]): ParsedReport {
   const reports = list.filter(r => r.format === 'quartus' || r.format === 'vivado')
   const out: ParsedReport = { format: reports[0]?.format ?? 'unknown', paths: [], clocks: [], summary: [], unconstrained: [], transfers: [], issues: [], found: [] }
-  const seen = new Set<string>()
+  const seen = new Map<string, TimingPath>()
   reports.forEach((r, i) => {
     for (const p of r.paths) {
       const k = [p.analysis, p.from, p.to, p.launch, p.latch].join('\u0000')
-      if (seen.has(k)) continue
-      seen.add(k)
-      out.paths.push({ ...p, id: `f${i}${p.id}` })
+      const prev = seen.get(k)
+      if (prev) { mergePath(prev, p); continue }
+      const own = { ...p, id: `f${i}${p.id}` }
+      seen.set(k, own)
+      out.paths.push(own)
     }
     for (const c of r.clocks) if (!out.clocks.some(x => x.name === c.name)) out.clocks.push(c)
     for (const s of r.summary) {
@@ -26,8 +28,15 @@ export function combine(list: ParsedReport[]): ParsedReport {
       else if (s.slack < prev.slack) Object.assign(prev, s, { tns: Math.min(prev.tns, s.tns) })
     }
     out.meta = { ...r.meta, ...out.meta }
-    out.totals ??= r.totals
-    for (const f of r.fmax ?? []) if (!out.fmax?.some(x => x.clock === f.clock)) (out.fmax ??= []).push(f)
+    for (const an of ['setup', 'hold'] as const) {
+      const t = r.totals?.[an]
+      if (t && !(out.totals?.[an] && out.totals[an].wns <= t.wns)) out.totals = { ...out.totals, [an]: t }
+    }
+    for (const f of r.fmax ?? []) {
+      const prev = out.fmax?.find(x => x.clock === f.clock)
+      if (!prev) (out.fmax ??= []).push({ ...f })
+      else if (f.fmax < prev.fmax) Object.assign(prev, f)
+    }
     for (const c of r.defaultClocks ?? []) if (!out.defaultClocks?.includes(c)) (out.defaultClocks ??= []).push(c)
     if (r.counts) out.counts = { ...r.counts, ...out.counts }
     out.issues.push(...r.issues)
