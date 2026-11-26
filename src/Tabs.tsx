@@ -64,7 +64,7 @@ function Overview({ project, run }: TabProps) {
           <Link href={`/app/p/${project.id}/fixes#noclock`} className="btn sm primary">Fix the clock</Link>
         </div>
       )}
-      {r.retimed.length > 0 && <div className="banner info">{r.retimed.map(x => `${x.clock} is re-timed from the report's ${fmtNs(x.from)} ns to ${fmtNs(x.to)} ns (${fmtN(1000 / x.to, 2)} MHz) from your SDC.`).join(' ')} Same-clock setup slack is shifted by the difference; recompile for exact numbers.</div>}
+      {r.retimed.length > 0 && <div className="banner info">{r.retimed.map(x => `${x.clock} is re-timed from the report's ${fmtNs(x.from)} ns to ${fmtNs(x.to)} ns (${fmtN(1000 / x.to, 2)} MHz) from your SDC.`).join(' ')} Same-clock setup slack is shifted by the difference, in proportion to each path&rsquo;s cycles; recompile for exact numbers.</div>}
       {r.summaryOnly && <div className="banner info"><span>This report has per-clock summaries but no path tables, so paths cannot be listed or classified. Export the failing paths with report_timing and import that file too.</span><Link href="/docs" className="btn sm outline">Export commands</Link></div>}
       {(lintErr > 0 || r.unconstrainedPorts.length > 0) && (
         <div className="banner warn">
@@ -113,7 +113,7 @@ function Overview({ project, run }: TabProps) {
             </table>
           </div>
           {untimed.length > 0 && <p className="muted small">{untimed.length} clock{untimed.length > 1 ? 's' : ''} with no timed paths in this report: <span className="mono">{untimed.map(c => c.clock.split('|').slice(-2).join('|')).join(', ')}</span></p>}
-          <p className="muted tiny">Fmax comes from the report&rsquo;s own Fmax summary when it has one. Values marked est. are 1000 / (period − worst same-clock setup slack); cross-clock paths are excluded.</p>
+          <p className="muted tiny">Fmax comes from the report&rsquo;s own Fmax summary when it has one. Values marked est. are 1000 / (period − worst same-clock setup slack per cycle); cross-clock paths are excluded.</p>
         </div>
         <WhatIf run={run} />
       </div>
@@ -170,7 +170,7 @@ function WhatIf({ run }: { run: TabProps['run'] }) {
           <div><dt>TNS</dt><dd className="mono">{fmtNs(w.tns)}</dd></div>
         </dl>
       )}
-      <p className="muted tiny">Shifts single-cycle same-clock setup slack by the period change. {w?.excluded ? `${w.excluded} cross-clock paths are not re-estimated because their requirement depends on both clocks.` : ''}</p>
+      <p className="muted tiny">Shifts same-clock setup slack by the period change (half of it for half-cycle paths, twice for two-cycle paths). {w?.excluded ? `${w.excluded} cross-clock paths are not re-estimated because their requirement depends on both clocks.` : ''}</p>
     </div>
   )
 }

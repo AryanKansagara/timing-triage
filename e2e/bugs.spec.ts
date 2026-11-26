@@ -33,7 +33,7 @@ for (const [why, sdc] of [
   await expect(kpi(page, 'Setup WNS').locator('b')).toHaveText('−5.000 ns')
 })
 
-test.fail('#5 a half-cycle path keeps half of the new period when re-timed', async ({ page }) => {
+test('#5 a half-cycle path keeps half of the new period when re-timed', async ({ page }) => {
   // Needs 0.5 + 14.7 = 15.2 ns; half of 20 ns is 10 ns; slack -5.2 ns.
   const msg = 'Info (332105): Deriving Clocks\nInfo (332105): create_clock -period 1.000 -name clk clk\nCritical Warning (332148): Timing requirements not met\n'
   await importFiles(page, ['x.sta.rpt', clocks([['clk', '1.000']]) + '\n' + paths("Slow Model Setup: 'clk'", [{ slack: '-14.700', from: 'u|a', to: 'u|b', rel: '0.500', delay: '15.200' }]) + '\n' + msg])
