@@ -95,9 +95,9 @@ function ProjectCard({ p }: { p: Project }) {
         {p.sampleId && <SampleBadge id={p.sampleId} />}
       </div>
       <dl className="mini-stats">
-        <div><dt>WNS</dt><dd className={`mono ${last && last.wns < 0 ? 'bad-text' : ''}`}>{last ? fmtNs(last.wns) : '—'}</dd></div>
-        <div><dt>TNS</dt><dd className="mono">{last ? fmtNs(last.tns, 1) : '—'}</dd></div>
-        <div><dt>Failing</dt><dd>{last ? last.failing : '—'}</dd></div>
+        <div><dt>WNS</dt><dd className={`mono ${last && (last.wns ?? 0) < 0 ? 'bad-text' : ''}`}>{last ? fmtNs(last.wns) : '—'}</dd></div>
+        <div><dt>TNS</dt><dd className="mono">{last && last.wns !== null ? fmtNs(last.tns, 1) : '—'}</dd></div>
+        <div><dt>Failing</dt><dd>{last?.total ? last.failing : '—'}</dd></div>
         <div><dt>Runs</dt><dd>{p.snapshots.length}</dd></div>
       </dl>
       {p.dataMissing && <p className="warn-text small">The report files live on another device. Re-import here to recompute paths.</p>}
