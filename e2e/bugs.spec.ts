@@ -1,7 +1,7 @@
 // Known bugs. Each test states the correct behaviour and is marked test.fail until its issue is fixed.
 import { analyzeButton, choose, clocks, crossing, expect, exported, HAND, importFiles, kpi, newDesign, paths, setSdc, summary, tab, test, unconstrained } from './fixtures.ts'
 
-test.fail('#2 a report with no timing data cannot replace a good one', async ({ page }) => {
+test('#2 a report with no timing data cannot replace a good one', async ({ page }) => {
   await importFiles(page, ['hand.rpt', HAND])
   await tab(page, 'Data')
   await choose(page, ['cut.rpt', '| Tool Version      : Vivado v.2024.2 (lin64)\n'])

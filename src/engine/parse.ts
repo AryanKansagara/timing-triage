@@ -26,6 +26,10 @@ export function parseReport(text: string): ParsedReport {
   }
 }
 
+/** False when a file had a report's format but nothing in it was read: there is nothing to analyze. */
+export const hasData = (r: ParsedReport) =>
+  !!(r.paths.length || r.summary.length || r.clocks.length || r.transfers.length || r.unconstrained.length || r.totals || r.fmax?.length || r.pulse?.length || r.counts)
+
 // ---------- Quartus ----------
 
 interface Table { title: string; header: string[]; rows: { cells: string[]; line: number }[]; line: number; context: string }
