@@ -92,6 +92,12 @@ const analysisOf = (s: string): Analysis | null => {
   return m ? m[1].toLowerCase() as Analysis : null
 }
 
+/** Two reports of one path: keep the numbers of the worst-slack copy; the other copy only fills gaps. Keeps prev's id. */
+export function mergePath(prev: TimingPath, p: TimingPath) {
+  const [win, lose] = p.slack < prev.slack ? [p, prev] : [prev, p]
+  Object.assign(prev, { ...defined(lose), ...defined(win) })
+}
+
 const defined = <T extends object>(o: T) => Object.fromEntries(Object.entries(o).filter(([k, v]) => v !== undefined && v !== '' && k !== 'id')) as Partial<T>
 /** "Slow 1200mV 85C Model Setup: 'clk'" -> "Slow 1200mV 85C Model" */
 const cornerOf = (title: string) => title.match(/^((?:slow|fast)\b.*?\bmodel)\b/i)?.[1]
@@ -150,9 +156,7 @@ function parseQuartus(text: string): ParsedReport {
     const prev = byKey.get(k)
     if (prev) {
       // The same path shows up once per operating corner and again in report_timing detail.
-      // Keep the numbers of the worst-slack copy; the other copy only fills gaps.
-      const [win, lose] = p.slack < prev.slack ? [p, prev] : [prev, p]
-      Object.assign(prev, { ...defined(lose), ...defined(win) })
+      mergePath(prev, p)
       return prev
     }
     byKey.set(k, p)

@@ -43,7 +43,7 @@ test.fail('#5 a half-cycle path keeps half of the new period when re-timed', asy
   await expect(kpi(page, 'Setup WNS').locator('b')).toHaveText('−5.200 ns')
 })
 
-test.fail('#6 the worst corner wins when two files list the same path', async ({ page }) => {
+test('#6 the worst corner wins when two files list the same path', async ({ page }) => {
   const p = (slack: string) => paths('Setup: clk', [{ slack, from: 'u|a', to: 'u|b' }])
   await importFiles(page, ['fast.rpt', p('3.000')], ['slow.rpt', p('-1.500')])
   await expect(kpi(page, 'Setup WNS').locator('b')).toHaveText('−1.500 ns')
